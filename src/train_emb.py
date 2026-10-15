@@ -51,7 +51,7 @@ def main():
     ap.add_argument("--names", required=True, help="comma-separated feature names (gpu_embed --name)")
     ap.add_argument("--C", type=float, default=0.05)
     ap.add_argument("--center", action="store_true")
-    ap.add_argument("--thr", type=float, default=0.5)
+    ap.add_argument("--thr", type=float, default=0.92)
     ap.add_argument("--with-style", action="store_true")
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
