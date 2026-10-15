@@ -204,8 +204,28 @@ Dosya yerleştirme, `.gitignore`, bu plan.
      yüklendiği ve örnek metindeki token sayısının kaynakla tuttuğu denetlenir.
    - Fayda CV'de birden çok ailede ölçülür (U9): stil + tokenizer ile yalnız stil, aynı katlar, eşli.
 
+### Adım 2 sonucu (ayrıntı: EXPERIMENTS.md, EDA.md)
+
+- En iyi tek model: char+word TF-IDF + LR, CV BA 0.347 / log loss 2.036.
+- En iyi iç içe harman (TF-IDF + stil/tokenizer LR): BA 0.392 / log loss 1.856.
+- Tokenizer özellikleri tek başına zayıf (v2: LR 0.180, LightGBM 0.163). Stil özelliklerine eklenince log loss her ailede iyileşiyor,
+  BA katkısı küçük ve gürültü sınırında.
+- Lab tahmini ~%73 doğru. Hataların ~%55'i aile içinde (Gemini flash üçlüsü ve pro ↔ flash, GLM ikilisi, gpt-5.6 üçlüsü),
+  ~%45'i lab dışında (GLM → Claude, Kimi/Qwen → GPT, claude-fable-5 ↔ GLM).
+
+### Adım 2 sonrası önerilen sıra (onay bekliyor)
+
+| sıra | iş | neden şimdi | kaynak |
+|---|---|---|---|
+| 1 | H-lite: mevcut harmanla internetsiz gönderim not defteri. Tokenizer + kod private dataset olarak; 1–3 satır testi, çıktı denetimi, süre ölçümü | İnternetsiz kurulum iki projede de hiç yapılmadı (U15). Riskini en ucuz üyeyle erkenden çözmek; ilk LB okuması da gelir (karar yine CV'den) | Kaggle CPU, GPU kotası harcamaz |
+| 2 | G (+ B'nin kümeleme kısmı): prompt kümeleme + yumuşak Hungarian eşleştirmenin mevcut harman OOF'u üzerinde benzetimi. k tahmini, model düşürme benzetimi | Train'de her prompt'a her model bir kez cevap vermiş. Eşleştirme aile içi karışıklığı (en büyük kayıp) doğrudan hedefliyor; GPU gerekmez | CPU |
+| 3 | A + B: dondurulmuş Qwen3 gömmeleri (küçük model, birkaç katman) + LR; prompt merkezleme kümeleme ile | Ucuz GPU probu; gömmelerin aile içi farkı yakalayıp yakalamadığını gösterir | ~1–2 GPU saati (tahmin, prob ile netleşecek) |
+| 4 | C: LoRA ince ayar (Qwen3 1.7B/4B), önce tek kat probu, sonra 5 kat | Muhtemel en büyük sıçrama; en pahalı adım | GPU kotasının büyük kısmı |
+| 5 | I (yeni öneri): çapraz-model log-olasılık özellikleri. Metnin token başına log-olasılık / sıra istatistikleri, aynı lab'ların açık akrabalarıyla (gpt-oss-20b, Qwen3.5 küçük, Gemma 4, GLM-4.7-Flash, Moonlight). Artık GBDT'ye (D) girdi | Tokenizer hipotezinin güçlü hâli: tokenizer sayıları zayıf ama tutarlı bir sinyal verdi | GPU; modeller gönderim not defterinde de koşmalı (9 saat bütçesine yazılır) |
+| 6 | D, E, F | Üyeler oluştukça | CPU |
+
 ### Adım 3+ (onaydan sonra; şimdilik plan)
-Önerilen sıra Adım 2 sonuçlarına göre güncellenecek:
+Plandaki iş listesi (sıra yukarıdaki öneriye göre):
 
 | Sıra | İş | CV protokolü | Maliyet |
 |---|---|---|---|
