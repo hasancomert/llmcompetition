@@ -54,11 +54,19 @@ def featurize(texts, tok, model, layer_fracs=(0.25, 0.5, 0.75, 1.0), batch=8, ma
         enc = {k: v.to(dev) for k, v in enc.items()}
         out = model(**enc, output_hidden_states=True)
         mask = enc["attention_mask"].unsqueeze(-1).float()
-        pooled = [(out.hidden_states[l].to(dev).float() * mask).sum(1) / mask.sum(1) for l in layers]  # multi-GPU safe
-        E = torch.cat(pooled, dim=1).cpu().numpy().astype(np.float16)
+        denom = mask.sum(1).clamp(min=1.0)
+        pooled = [(out.hidden_states[l].to(dev).float() * mask).sum(1) / denom for l in layers]  # multi-GPU safe
+        E = torch.cat(pooled, dim=1).cpu().numpy()
+        if not np.isfinite(E).all():
+            raise FloatingPointError(f"non-finite pooled hidden states in batch starting at {s} (layers {layers})")
+        E = E.astype(np.float16)
         lens = enc["attention_mask"].sum(1).tolist()
         for j, i in enumerate(idx):
             n = int(lens[j])
+            if n < 2:                                               # empty / one-token text: neutral stats
+                lp[i] = np.zeros(13, dtype=np.float32)
+                emb[i] = E[j]
+                continue
             lg = out.logits[j, :n - 1].to(dev).float()             # per text: avoids (batch, len, vocab) float32
             tgt = enc["input_ids"][j, 1:n]
             logp_all = torch.log_softmax(lg, dim=-1)
@@ -69,6 +77,8 @@ def featurize(texts, tok, model, layer_fracs=(0.25, 0.5, 0.75, 1.0), batch=8, ma
             q = np.quantile(v, [0.05, 0.1, 0.25, 0.5, 0.75]) if len(v) else np.zeros(5)
             lp[i] = np.array([v.mean(), v.std(), *q, np.log1p(r).mean(), (r == 0).mean(), e.mean(), e.std(),
                               (v + e).mean(), len(v)], dtype=np.float32)
+            if not np.isfinite(lp[i]).all():
+                raise FloatingPointError(f"non-finite log-prob stats for text {i} (fp16 overflow?)")
             emb[i] = E[j]
             del lg, logp_all
         del out
