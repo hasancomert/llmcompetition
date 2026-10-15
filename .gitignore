@@ -1,0 +1,29 @@
+# Competition data, model weights and run outputs must never reach GitHub
+# (Kaggle "Name That LLM" rules).
+data/
+models/
+outputs/
+*.csv
+*.parquet
+*.pt
+*.safetensors
+
+# Python / OS cruft
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# Extra guards: predictions, checkpoints, weights and Kaggle kernel outputs
+# must not be committed either (they can hold labels or derived data).
+*.npy
+*.npz
+*.bin
+*.pth
+*.ckpt
+*.pkl
+*.gguf
+*.onnx
+*.zip
+cache/
+kaggle/*/output/
