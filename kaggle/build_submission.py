@@ -59,7 +59,7 @@ def build() -> Path:
                            text=True).stdout.strip()
     git += "+dirty" if dirty else ""
     src = CELL.replace("__FILES__", repr(payload)).replace("__CODE_SHA__", repr(sha)).replace("__GIT__", repr(git))
-    nb = {"cells": [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+    nb = {"cells": [{"cell_type": "code", "id": "nllm-submit-main", "execution_count": None, "metadata": {}, "outputs": [],
                      "source": src.strip().splitlines(keepends=True)}],
           "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                        "language_info": {"name": "python"}},

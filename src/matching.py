@@ -14,43 +14,104 @@ import argparse
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from sklearn.cluster import AgglomerativeClustering
-from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import adjusted_rand_score, homogeneity_completeness_v_measure
 from sklearn.preprocessing import normalize
 
-from common import K, encode_y, iter_folds, load_folds, load_member, load_train, metrics
+from common import K, OUT, encode_y, iter_folds, load_folds, load_member, load_train, metrics
 
 
-def topic_vectors(texts, n_components=128, seed=0):
-    """Unit-norm LSA vectors of content words (topic, not style): stop words removed, lowercase, sublinear tf."""
-    tv = TfidfVectorizer(lowercase=True, stop_words="english", sublinear_tf=True, min_df=2, max_df=0.05,
-                         token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b")
-    X = tv.fit_transform(texts)
-    k = min(n_components, X.shape[0] - 1, X.shape[1] - 1)
-    Z = TruncatedSVD(k, random_state=seed).fit_transform(X) if k >= 2 else X.toarray()
-    return normalize(Z)
+MIN_CLUSTER_ROWS = 40   # below this the test is too small to cluster (the interactive 1-3 row test)
 
 
-def cluster_prompts(texts, threshold=0.75, n_components=128):
-    """Average-linkage agglomerative clustering on cosine distance; the number of clusters is not given, it
-    follows from the distance threshold. Returns integer cluster labels."""
+def topic_matrix(texts, max_df_docs=40):
+    """Unit-norm TF-IDF rows of content words (topic, not style). max_df is an ABSOLUTE document count: a word
+    shared by one prompt's texts appears in <= ~18 documents whatever the test size, so the representation does not
+    change with n (audit finding: a relative max_df and a fixed SVD size tied the threshold to 150 prompts)."""
+    tv = TfidfVectorizer(lowercase=True, stop_words="english", sublinear_tf=True, min_df=2,
+                         max_df=max(int(max_df_docs), 2), token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b")
+    try:
+        X = tv.fit_transform(texts)
+    except ValueError:            # no term survives pruning (tiny or odd input): every text its own topic
+        return None
+    return normalize(X)
+
+
+def cluster_tree(texts, max_df_docs=40):
+    """Average-linkage tree (scipy) over cosine distances of topic_matrix rows. Returns (Z, nz, n): Z is None
+    when fewer than two texts have a surviving content word."""
+    from scipy.cluster.hierarchy import linkage
+    from scipy.spatial.distance import squareform
     n = len(texts)
-    if n < 3:
-        return np.arange(n)
-    Z = topic_vectors(texts, n_components)
-    return AgglomerativeClustering(n_clusters=None, metric="cosine", linkage="average",
-                                   distance_threshold=threshold).fit_predict(Z)
+    X = topic_matrix(texts, max_df_docs)
+    if X is None:
+        return None, np.array([], dtype=np.int64), n
+    nz = np.flatnonzero(X.getnnz(axis=1) > 0)
+    if len(nz) < 2:
+        return None, nz, n
+    D = 1.0 - (X[nz] @ X[nz].T).toarray()
+    np.clip(D, 0.0, 2.0, out=D)
+    np.fill_diagonal(D, 0.0)
+    D = (D + D.T) / 2
+    return linkage(squareform(D, checks=False), method="average"), nz, n
 
 
-def match_cluster(L, lam):
-    """L: (n, K) log-probabilities of one cluster. Returns the assigned class per row."""
+def cut_tree(tree, threshold):
+    """Cluster labels for one distance threshold; texts without content words are singletons."""
+    from scipy.cluster.hierarchy import fcluster
+    Z, nz, n = tree
+    labels = np.arange(n) + n
+    if Z is not None:
+        labels[nz] = fcluster(Z, t=threshold, criterion="distance")
+    return np.unique(labels, return_inverse=True)[1]
+
+
+def cluster_prompts(texts, threshold=0.92, max_df_docs=40):
+    """Prompt clusters of a set of texts; the number of clusters follows from the threshold (not given).
+    Texts with no surviving content word become singletons instead of crashing the cosine metric."""
+    if len(texts) < MIN_CLUSTER_ROWS:
+        return np.arange(len(texts))
+    return cut_tree(cluster_tree(texts, max_df_docs), threshold)
+
+
+def scale_study(P, y, prompts, texts, reps=3, seed=0):
+    """Cluster quality and matching gain vs the number of prompts, keep scenario, threshold and max_df."""
+    rng = np.random.default_rng(seed)
+    up = np.unique(prompts)
+    rows = []
+    thrs = (0.8, 0.85, 0.88, 0.9, 0.92, 0.94, 0.96)
+    for n_pr in (30, 60, 100, 150):
+        for rep in range(reps if n_pr < 150 else 1):
+            chosen = set(rng.choice(up, n_pr, replace=False)) if n_pr < 150 else set(up)
+            base_ix = np.flatnonzero([p in chosen for p in prompts])
+            for scen, keep in (("full", None), ("drop.35-1", (0.35, 1.0)), ("drop.2-.6", (0.2, 0.6))):
+                ix = base_ix if keep is None else base_ix[drop_mask(y[base_ix], None, rng, *keep)]
+                for mdf in (25, 40, 80):
+                    tree = cluster_tree([texts[i] for i in ix], mdf)
+                    base = ba_labels(y[ix], P[ix].argmax(1))
+                    for thr in thrs:
+                        c = cut_tree(tree, thr)
+                        rows.append(dict(n_prompts=n_pr, rep=rep, scen=scen, max_df=mdf, thr=thr, n=len(ix),
+                                         ratio=len(np.unique(c)) / n_pr, ari=adjusted_rand_score(prompts[ix], c),
+                                         gain=ba_labels(y[ix], match(P[ix], c, 2.0)) - base))
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    pd.set_option("display.width", 200)
+    g = df.groupby(["max_df", "thr", "scen", "n_prompts"])[["ratio", "ari", "gain"]].mean().round(3)
+    print(g.unstack("n_prompts").to_string())
+    return df
+
+
+def match_cluster(L, lam, big=1e6):
+    """L: (n, K) log-probabilities of one cluster. The j-th text given to the same model costs lam * j extra
+    (lam = inf -> big * j, the large-lambda limit). Copies are not capped for clusters up to 100 texts, so the
+    soft penalty is the whole objective. Returns the assigned class per row."""
     n = L.shape[0]
     if n == 1 or lam == 0:
         return L.argmax(1)
-    copies = int(np.ceil(n / K)) + 1
-    cost = np.concatenate([-L + (lam * j if np.isfinite(lam) else (0 if j == 0 else 1e6)) for j in range(copies)], axis=1)
+    copies = n if n <= 100 else int(np.ceil(n / K)) + 3
+    step = big if not np.isfinite(lam) else lam
+    cost = np.concatenate([-L + step * j for j in range(copies)], axis=1)
     rows, cols = linear_sum_assignment(cost)
     out = np.empty(n, dtype=np.int64)
     out[rows] = cols % K
@@ -122,10 +183,17 @@ def main():
     ap.add_argument("--tag", default="blend_v2_tok_ba")
     ap.add_argument("--sims", type=int, default=5)
     ap.add_argument("--nested", action="store_true", help="nested lambda selection + EXPERIMENTS.md rows")
-    ap.add_argument("--thr", type=float, default=0.5)
+    ap.add_argument("--thr", type=float, default=0.92)
+    ap.add_argument("--scale", action="store_true", help="cluster/matching scale study (30-150 prompts)")
     args = ap.parse_args()
     if args.nested:
         return nested_eval(args)
+    if args.scale:
+        tr = load_train()
+        P, _ = load_member(args.tag)
+        df = scale_study(P, encode_y(tr["model"]), tr["prompt_id"].to_numpy(), tr["text"].tolist())
+        df.to_csv(OUT / "matching_scale_study.csv", index=False)
+        return
     tr = load_train()
     y = encode_y(tr["model"])
     folds = load_folds(tr)
