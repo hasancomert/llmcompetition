@@ -104,3 +104,4 @@ Diğer gözlemler:
 | 48 | emb_qwen3_8b_base_C0.05 | frozen LM embeddings (qwen3_8b_base, 16384 cols), LogReg C=0.05 | 0.3926 | 0.3926 ± 0.0305 | 2.3074 | | 104s | src 1e28e4e3c715 |
 | 49 | lp_qwen3_0.6b_base+qwen3_1.7b_base+qwen3_4b_base+qwen3_8b_base_C0.1 | LM token log-prob stats (qwen3_0.6b_base, qwen3_1.7b_base, qwen3_4b_base, qwen3_8b_base, 52 cols), LogReg C=0.1 | 0.1678 | 0.1678 ± 0.0079 | 2.6280 | | 8s | src 1e28e4e3c715 |
 | 50 | lp_qwen3_0.6b_base+qwen3_1.7b_base+qwen3_4b_base+qwen3_8b_base_style_C0.1 | LM token log-prob stats (qwen3_0.6b_base, qwen3_1.7b_base, qwen3_4b_base, qwen3_8b_base, 196 cols) + style+tok v2, LogReg C=0.1 | 0.3279 | 0.3279 ± 0.0151 | 1.9911 | | 32s | src 1e28e4e3c715 |
+| 51 | emb_qwen3_4b_base_C0.01 | frozen LM embeddings (qwen3_4b_base, 10240 cols), LogReg C=0.01 | 0.3949 | 0.3949 ± 0.0294 | 1.9791 | | 132s | src 8e9e94a5ebb4 |

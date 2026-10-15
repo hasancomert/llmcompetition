@@ -35,14 +35,49 @@ def load_feats(kind, names, split):
     return mats
 
 
-def center_by_clusters(X, texts, thr):
+def center_by_clusters(X, texts, thr, min_size=3):
+    """Subtract each unsupervised cluster's mean; clusters smaller than min_size are left as they are (a singleton
+    would become an all-zero row)."""
     from matching import cluster_prompts
     g = cluster_prompts(texts, thr)
     Xc = X.copy()
     for c in np.unique(g):
         ix = g == c
-        Xc[ix] -= X[ix].mean(0)
+        if ix.sum() >= min_size:
+            Xc[ix] -= X[ix].mean(0)
     return Xc, g
+
+
+def center_sim(Xtr_raw, y, folds, texts, thr, C, sims, seed=0):
+    """Test-like check of prompt centering (audit finding: on full train grids a cluster mean is pure topic, on the
+    test it also carries the styles of whichever models are present). Per simulation: drop rows with model-specific
+    keep rates, cluster only the kept texts, center kept rows with those clusters, fit/score per fold on kept rows;
+    the same kept rows are scored without centering for a paired comparison."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from matching import drop_mask
+    from common import metrics
+    rng = np.random.default_rng(seed)
+    res = []
+    for sim in range(sims):
+        keep = np.flatnonzero(drop_mask(y, None, rng, 0.35, 1.0))
+        Xk = Xtr_raw[keep]
+        Xc, _ = center_by_clusters(Xk, [texts[i] for i in keep], thr)
+        yk, fk = y[keep], folds[keep]
+        out = {}
+        for name, X in (("raw", Xk), ("centered", Xc)):
+            P = np.zeros((len(keep), K))
+            for k in np.unique(fk):
+                trn, val = np.flatnonzero(fk != k), np.flatnonzero(fk == k)
+                m = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=3000)).fit(X[trn], yk[trn])
+                P[np.ix_(val, m.classes_)] = m.predict_proba(X[val])
+            out[name] = metrics.balanced_accuracy(yk, P)
+        res.append(out)
+        print(f"sim {sim}: kept {len(keep)} rows, raw BA {out['raw']:.4f}, centered BA {out['centered']:.4f}", flush=True)
+    d = np.array([r["centered"] - r["raw"] for r in res])
+    print(f"centering under test-like drops: mean diff {d.mean():+.4f} (per sim {np.round(d, 4).tolist()})", flush=True)
+    return res
 
 
 def main():
@@ -54,6 +89,7 @@ def main():
     ap.add_argument("--thr", type=float, default=0.92)
     ap.add_argument("--with-style", action="store_true")
     ap.add_argument("--tag", default=None)
+    ap.add_argument("--center-sim", type=int, default=0, help="only run the test-like centering check (N sims)")
     args = ap.parse_args()
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
@@ -71,6 +107,8 @@ def main():
         assert meta["ids"] == te["id"].tolist()
     Xtr = np.hstack([m[0] for m in tr_m])
     Xte = np.hstack([m[0] for m in te_m])
+    if args.center_sim:
+        return center_sim(Xtr, y, folds, tr["text"].tolist(), args.thr, args.C, args.center_sim)
     note = ""
     if args.center:
         Xtr, g = center_by_clusters(Xtr, tr["text"].tolist(), args.thr)

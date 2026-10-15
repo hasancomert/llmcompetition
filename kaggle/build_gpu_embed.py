@@ -32,12 +32,15 @@ if __name__ == "__main__":
             shutil.copy(js, ROOT / "outputs" / "emb" / js.name)
             print("fetched emb", js.name)
         sys.exit(0)
-    sources = [f"qwen-lm/qwen-3/transformers/{m.split(':')[1]}/1" for m in a.models.split(",")]
+    # model spec: name:hint[:dtype[:kaggle source]]; the source defaults to the official Qwen3 instance of <hint>
+    specs = [m.split(":") for m in a.models.split(",")]
+    sources = [sp[3] if len(sp) > 3 else f"qwen-lm/qwen-3/transformers/{sp[1]}/1" for sp in specs]
+    run_models = ",".join(":".join((sp + ["auto"])[:3]) for sp in specs)
     d = kaggle_runner.build(
         ROOT / "outputs" / "kaggle_build", a.slug, "hasancmert",
         code_files={"src/gpu_embed.py": ROOT / "src" / "gpu_embed.py",
                     "src/gpu_run_embed.py": ROOT / "src" / "gpu_run_embed.py"},
-        commands=[f"EMB_MODELS={a.models} python src/gpu_run_embed.py"],
+        commands=[f"EMB_MODELS={run_models} python src/gpu_run_embed.py"],
         competition="name-that-llm", models=sources, out_dirs=("emb",),
         gpu=True, internet=False, machine_shape="NvidiaTeslaT4")
     print("built", d, "models", sources)

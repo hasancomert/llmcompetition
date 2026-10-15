@@ -20,14 +20,17 @@ import pandas as pd
 import torch
 
 
-def load(model_dir: str):
+def load(model_dir: str, dtype_name: str = "auto"):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
     cap = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else (0, 0)
-    dtype = torch.bfloat16 if cap >= (8, 0) else torch.float16
+    dtype = {"fp16": torch.float16, "fp32": torch.float32, "bf16": torch.bfloat16}.get(
+        dtype_name, torch.bfloat16 if cap >= (8, 0) else torch.float16)
+    if not torch.cuda.is_available() and dtype_name == "auto":
+        dtype = torch.float32
     n_gpu = torch.cuda.device_count()
     kw = dict(dtype=dtype, local_files_only=True)
     if n_gpu > 1:
@@ -95,11 +98,12 @@ def main():
     ap.add_argument("--out", default="emb")
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--max-len", type=int, default=512)
+    ap.add_argument("--dtype", default="auto", choices=["auto", "fp16", "fp32", "bf16"])
     a = ap.parse_args()
     t0 = time.time()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    tok, model, dtype = load(a.model_dir)
+    tok, model, dtype = load(a.model_dir, a.dtype)
     print(f"[{a.name}] loaded {a.model_dir} dtype {dtype} gpus {torch.cuda.device_count()} in {time.time() - t0:.0f}s",
           flush=True)
     for path in a.texts:
