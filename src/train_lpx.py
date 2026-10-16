@@ -98,7 +98,8 @@ def style2_cached(texts: pd.Series, split: str) -> pd.DataFrame:
 def build_blocks(blocks, tr, te):
     Xs = {"train": [], "test": []}
     for split, df in (("train", tr), ("test", te)):
-        L = pd.concat([lp_frame(n, split, df["id"]) for n in QWEN + ["glm4_9b"]], axis=1)
+        needs_lm = any(b in ("lp4", "glm", "cross") for b in blocks)      # style-only members need no LM files
+        L = pd.concat([lp_frame(n, split, df["id"]) for n in QWEN + ["glm4_9b"]], axis=1) if needs_lm else None
         for b in blocks:
             if b == "lp4":
                 cols = [c for c in L.columns if not c.startswith("glm") and (c.startswith("q06") or not c.endswith("n_tok"))]
