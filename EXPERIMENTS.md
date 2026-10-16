@@ -116,3 +116,6 @@ Diğer gözlemler:
 | 60 | emb_qwen3_4b_base_C0.001 | frozen LM embeddings (qwen3_4b_base, 10240 cols), LogReg C=0.001 | 0.4063 | 0.4063 ± 0.0349 | 1.7498 | | 118s | src 2bacb7ef9c88 |
 | 61 | emb_qwen3_8b_base_C0.001 | frozen LM embeddings (qwen3_8b_base, 16384 cols), LogReg C=0.001 | 0.4045 | 0.4045 ± 0.0314 | 1.7353 | | 325s | src bdb8fc10231c |
 | 62 | emb_qwen3_0.6b_base_C0.003 | frozen LM embeddings (qwen3_0.6b_base, 4096 cols), LogReg C=0.003 | 0.3752 | 0.3752 ± 0.0165 | 1.8348 | | 144s | src bdb8fc10231c |
+| 63 | emb_qwen3_1.7b_base_C0.003 | frozen LM embeddings (qwen3_1.7b_base, 8192 cols), LogReg C=0.003 | 0.3841 | 0.3841 ± 0.0321 | 1.8391 | | 170s | src bdb8fc10231c |
+| 64 | emb_qwen3_4b_base_C0.0003 | frozen LM embeddings (qwen3_4b_base, 10240 cols), LogReg C=0.0003 | 0.3889 | 0.3889 ± 0.0260 | 1.8812 | | 34s | src bdb8fc10231c |
+| 65 | emb_qwen3_8b_base_C0.0003 | frozen LM embeddings (qwen3_8b_base, 16384 cols), LogReg C=0.0003 | 0.3978 | 0.3978 ± 0.0276 | 1.7985 | | 63s | src bdb8fc10231c |
