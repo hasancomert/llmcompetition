@@ -118,6 +118,17 @@ sklearn ile yeniden puanlandı, kodu sızıntı açısından okundu ve çoğu bi
     değişmedi. Sabit ağırlıklı blend OOF'u cpu2 0.4041, v4 0.4626.
   - Fold-0 uçtan uca kontrolü: `tests/e2e_replay.py`.
 
+## Metin başına 2. tur (16 Ekim öğleden sonra): hiçbiri blend'i iyileştirmedi
+
+| yön | sonuç |
+|---|---|
+| Eğitim metinlerinden kırpma artırması (pencere, önek, aynı etiketli ekleme) | n-gram üyesi düştü: −0.009 ile −0.020. Stil üyesinde CPU blend'inde ±0.004, gürültü. Kaydedilen `lpxaug_..._bag0-1-2_T` (0.3475) önerilmiyor |
+| Zor çift / alt aile uzmanları (gemini 3.7/3.8, glm ikilisi, gpt-5.6 üçlüsü, claude grubu) | Grup içi ayrım blend'in seviyesinde. Ek görüş olarak ya da üçüncü birleştirici olarak eklenince 0.456–0.461, ağırlık 0. Tek pozitif sonuç `subc_fabglm_T`: {fable, glm, glm-flash} içinde tek bir sıcaklık, 0.4619 → 0.4652 (+0.0033 [+0.0004, +0.0067], 19 satır). Çok denemeden seçildiği için alınmadı; doğrulayıcı "uncertain" dedi |
+| Test metinleriyle kendi kendine eğitim (metin başına, sahte etiket) | Açıkça zararlı: emb8 −0.022 ile −0.095, n-gram −0.048; çarpık test simülasyonunda da. Sebep: sahte etiketli bir metin aynı prompt'taki kardeşlerini o etikete çekiyor. Kardeşleri ayıran versiyonda bile kazanç yok |
+
+Sonuç: mevcut özelliklerle metin başına sınıflandırıcı ~0.46'da doymuş. Sıradaki kaldıraçlar GPU tarafında: düzgün
+eğitilmiş LoRA (ortalama havuzlama, kesilmiş katmanlar, daha yüksek öğrenme oranı, 4+ epoch) ve 12 katmanlı gömmeler.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
