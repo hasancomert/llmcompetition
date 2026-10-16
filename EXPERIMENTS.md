@@ -50,6 +50,30 @@ Diğer gözlemler:
 - Yalnız tokenizer özellikleri tek başına zayıf: v2'de LR 0.180, LightGBM 0.163 (şans 0.056). En önemli özellikler
   Gemma oranları (`chars_per_tok_gemma`, `frac_single_char_gemma`), ardından o200k ve Kimi'nin tek-karakter token oranları.
 
+## Adım 3 özeti (GPU üyeleri, prompt merkezleme, eşleştirme)
+
+- **Prompt merkezleme** (her metnin özellik satırından, etiketsiz prompt kümesinin ortalaması çıkarılır; test kendi
+  içinde kümelenir) en büyük kaldıraç oldu:
+
+| üye | ham BA / log loss | merkezlenmiş BA / log loss |
+|---|---|---|
+| Qwen3-8B gömme, LR C 0.001 | 0.4045 / 1.735 | 0.5583 / 1.3239 |
+| Qwen3-4B gömme, LR C 0.001 | 0.4063 / 1.750 | 0.5498 / 1.3538 |
+| 4×Qwen3 lp + stil+tok, LR C 0.1 | 0.3279 / 1.991 | 0.4016 / 1.7484 |
+| stil+tok, LR C 0.1 | 0.2993 / ~2.03 | 0.3782 / 1.8353 |
+| char TF-IDF (SVC C 0.3; merkezlenmişte 50k sütun) | 0.3249 / 2.0606 | 0.3956 / 1.8215 |
+
+- Tam OOF'ta emb/lp üyeleri bütün train metinlerinin kümeleriyle merkezlendi (prompt'lar katlara gruplu olduğu için
+  doğrulama metinlerinin kümeleri çoğunlukla yalnız kendi katından). Test benzeri benzetim (eğitim katı bütün, doğrulama
+  katı düşürülüp kendi içinde kümelenir) 8B için 0.53–0.55 verdi; yani tam OOF hafif iyimser.
+- **v3 harman** (merkezlenmiş tfc + lpc + emb4c + emb8c, ağırlıklar .167/.167/.167/.5): iç içe BA 0.5931 / log loss
+  1.2539. En iyi tek üyeye göre +0.0348 [+0.0215, +0.0482].
+- **Test benzeri tam boru hattı** (`src/pipeline_sim.py`: model başına düşürme, test kendi içinde kümelenir ve
+  merkezlenir, sonra eşleştirme): λ = 2'de hafif düşürme U(0.35, 1) 0.6162, sert U(0.2, 0.6) 0.5567. Aynı benzetimde
+  gönderilmeye hazır v2 GPU harmanı 0.559 / 0.519.
+- **İşe yaramayanlar:** LoRA probu (0.265), GLM-4-9B'yi eklemek (+0.0015, anlamsız), merkezlenmiş LR TF-IDF
+  üyeleri (log loss'u yüksek; harmanda ağırlık 0).
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |

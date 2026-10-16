@@ -265,6 +265,22 @@ GPU bütçesi:
 - Aynı anda en çok 2 GPU oturumu açılabiliyor (EV §8).
 - Her büyük işten önce tek kat + tek tohum probu yapılır (T14).
 
+### Adım 3 durumu (16 Ekim 2026; ayrıntı ve bütün sayılar: EXPERIMENTS.md)
+
+| iş | durum | ölçülen sonuç |
+|---|---|---|
+| H-lite | bitti | `nllm-submit` v1 (CPU) ve `nllm-submit-gpu` v1 (GPU, 4 Qwen3) internetsiz koştu, çıktı denetimi geçti |
+| G | bitti | kümeleme v2 + yumuşak Hungarian; λ iç içe / benzetimle seçildi (v3'te λ = 2) |
+| A + B | bitti | dondurulmuş Qwen3 gömmeleri ham 0.40 → prompt merkezlemeyle 0.55–0.56 (test benzeri benzetimde +0.146) |
+| B her aileye | bitti | merkezleme her özellik ailesinde işe yaradı: lp + stil 0.33 → 0.40, stil + tok 0.30 → 0.38, char TF-IDF 0.33 → 0.41 |
+| E (kısmen) | v3 harman | iç içe tepe tırmanma: BA 0.5931 / log loss 1.2539. Test benzeri tam boru hattı benzetimi (eşleştirmeli): hafif düşürme 0.616, sert düşürme 0.557 |
+| C | ertelendi | LoRA probu (Qwen3-1.7B, 2 kat, 2 epoch) BA 0.265; donmuş gömmenin çok altında, eksik öğrenmiş |
+| I | kısmen | 4 Qwen3'ün log-olasılık istatistikleri lp üyesinde. GLM-4-9B harmana +0.0015 (anlamsız), alınmadı. Gemma 4 T4'te çalışmadı |
+
+- GPU kotası: Kaggle haftalık 30 saatlik GPU kotası 16 Ekim'de doldu. v3 not defteri hazır ve uçtan uca sınandı
+  (fold 0 sahte test: 0.682, düşürmeli 0.677). Kota yenilenince push edilecek.
+- Sırada (CPU): istif (E), merkezleme eşiği, katman seçimi, artık model (D), sınıf kaydırma (F).
+
 ## 6. Çalışma kuralları (kullanıcıdan)
 
 - Kararlar CV'ye göre; her deney `EXPERIMENTS.md`'de (no, değişiklik, CV BA, CV log loss, varsa public LB). İşe yaramayanlar da yazılır.
