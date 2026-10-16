@@ -285,7 +285,10 @@ def _run_fold_ext(args, texts_tr, y_tr, g_tr, texts_va, texts_te, ext):
     if args.model == "lr":                    # start point that has seen no official row (see the module docstring)
         clean = np.array([i for i, s in enumerate(leak_e) if not s], dtype=int)
         f_e = fit_logits(args, A_e[clean], y_e[clean], w_e[clean])
-        init = (f_e.model.coef_, f_e.model.intercept_)
+        cls = f_e.model.classes_                  # labels without external rows (--ext-drop-labels) get zero weights
+        coef, inter = np.zeros((K, A_e.shape[1])), np.full(K, float(f_e.model.intercept_.min()))
+        coef[cls], inter[cls] = f_e.model.coef_, f_e.model.intercept_
+        init = (coef, inter)
         print(f"  [ext fold] external-only start {time.time() - t0:.0f}s ({it(f_e)} it)", flush=True)
     f = fit_logits(args, *train_set(np.arange(len(y_tr)), np.arange(len(y_e))), init=init)
     print(f"  [ext fold] {A_tr.shape[0]}+{A_e.shape[0]} rows x {A_tr.shape[1]} features: full fit {time.time() - t0:.0f}s "
