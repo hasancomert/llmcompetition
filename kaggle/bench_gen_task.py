@@ -19,7 +19,7 @@ import pandas as pd
 
 import kaggle_benchmarks as kbench
 
-SPLIT = "dev"          # rows_<SPLIT>.csv of the attached dataset (dev: 3 templates x 10 prompts; eval: 1 x 20)
+SPLIT = "eval"         # rows_<SPLIT>.csv of the attached dataset (dev: 3 templates x 10 prompts; eval: T2 x 20)
 REASONING = "low"      # same as the Featherless runs (reasoning_effort=low); falls back to the model default
 TEMPERATURE = 1.0      # provider default for these models; ignored where the model does not take a temperature
 MAX_OUT = 8000         # output-token cap: the proxy reserves the worst-case cost (model maximum output) per call and

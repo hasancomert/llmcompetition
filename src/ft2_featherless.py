@@ -42,9 +42,12 @@ def main():
     ap.add_argument("split", choices=["dev", "eval"])
     ap.add_argument("--cap", type=float, default=1.0, help="USD cap for the fit test v2 Featherless calls")
     ap.add_argument("--allowance", type=int, default=1500)
+    ap.add_argument("--labels", default="", help="';'-separated labels to generate (default: all three)")
     a = ap.parse_args()
     rows = pd.read_csv(OUT / f"rows_{a.split}.csv", keep_default_na=False)
     rows = rows[rows.provider == "featherless"]
+    if a.labels:
+        rows = rows[rows.label.isin(a.labels.split(";"))]
     out_path = OUT / f"featherless_{a.split}.jsonl"
     done = {json.loads(l)["row_id"] for l in out_path.read_text().splitlines() if l.strip()} if out_path.exists() else set()
     t0 = reusable_t0()
