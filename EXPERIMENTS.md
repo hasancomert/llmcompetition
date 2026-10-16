@@ -271,6 +271,100 @@ dışarıda. Profil, lisans ve sızıntı ayrıntıları `EXTERNAL_DATA.md`'de; 
   metinlerinin resmi metinlere hiç benzememesi.
 - Final submission'a önerilmez; karar kullanıcının. Bayrak (`--ext`, varsayılan kapalı) kodda duruyor.
 
+## Uyum testi v2 (16–17 Ekim; dal `featherless-extra-data`)
+
+Kurallar üretimden önce PLAN.md'ye yazıldı ("Uyum testi v2").
+- 30 geri kurulmuş train prompt'u, fold başına 6: 10'u DEV (şablon seçimi), 20'si EVAL (eşik).
+- 12 etiket Kaggle Benchmarks'ta private bir task'la (`kaggle/bench_gen_task.py`), 3 etiket Featherless'ta üretildi.
+- Prompt'lar ve metinler yarışma verisinden türüyor: private, repoda yok.
+- **Ölçüt:** r = ort. P(kendi etiketi | üretilen) / ort. P(kendi etiketi | aynı prompt'ların gerçek metni).
+  - Tahminci, prompt'u görmemiş fold'un 3 üyeli CPU blend'i (ng_fw + ng_fwsh + style2; v1 ile aynı).
+
+**DEV, şablon seçimi** (10 prompt, 13 etiket; gpt-5.5 ve gpt-6-astra maliyet yüzünden DEV'de yok):
+
+| şablon | r medyanı | üretilen → doğru etiket (etiket ort.) | doğru lab | maliyet |
+|---|---|---|---|---|
+| T0: v1 talimatı | 0.693 | 0.285 | 0.638 | 0.73 $ |
+| T1: edebi üslup notu | 0.823 | 0.292 | 0.615 | 0.96 $ |
+| T2: denemeci sistem prompt'u | **0.842** | 0.338 | 0.646 | 0.95 $ |
+
+- T2 seçildi; T0'a fark 0.149 (kural: ≥ 0.05).
+- Etiket başına r, n=10'da çok gürültülü. Aynı etiketin r'si şablona göre 0.36 ile 1.04 arasında oynuyor
+  (gpt-5.6-luna).
+
+**EVAL, eşik** (20 prompt, T2; kural r ≥ 0.7; GA: prompt'lar üzerinden bootstrap, `eval_eval_ci.csv`):
+
+| etiket | r | %95 GA | P(r ≥ 0.7) | üretilen → doğru etiket | gerçek | üretilenler en çok | sonuç |
+|---|---|---|---|---|---|---|---|
+| glm-5.3-flash | 1.83 | [1.20, 2.69] | 1.00 | 0.25 | 0.05 | glm-5.3-flash | geçti |
+| claude-opus-5 | 1.36 | [0.96, 1.97] | 1.00 | 0.70 | 0.65 | claude-opus-5 | geçti |
+| glm-5.3 | 1.28 | [0.86, 2.01] | 1.00 | 0.35 | 0.15 | glm-5.3 | geçti |
+| gpt-5.6-luna | 1.13 | [0.84, 1.52] | 1.00 | 0.30 | 0.50 | gpt-5.6-luna | geçti |
+| claude-opus-4-8 | 0.99 | [0.70, 1.43] | 0.98 | 0.25 | 0.20 | claude-opus-4-8 | geçti |
+| gpt-6-astra | 0.98 | [0.67, 1.45] | 0.96 | 0.65 | 0.65 | gpt-6-astra | geçti |
+| gpt-5.6-terra | 0.91 | [0.55, 1.42] | 0.84 | 0.10 | 0.30 | gpt-5.6-luna | geçti |
+| claude-sonnet-5 | 0.85 | [0.56, 1.20] | 0.82 | 0.30 | 0.65 | claude-sonnet-5 | geçti |
+| gemini-3.1-pro-preview | 0.79 | [0.58, 1.06] | 0.78 | 0.65 | 0.80 | gemini-3.1-pro | geçti |
+| gpt-5.5 | 0.73 | [0.44, 1.28] | 0.55 | 0.30 | 0.50 | gpt-5.5 | geçti (sınırda) |
+| gpt-5.6-sol | 0.69 | [0.51, 0.98] | 0.48 | 0.05 | 0.20 | gpt-5.6-terra | kaldı (sınırda) |
+| claude-opus-4-6 | 0.66 | [0.44, 1.02] | 0.38 | 0.40 | 0.50 | claude-opus-4-6 | kaldı |
+| gemini-3.8-flash | 0.60 | [0.41, 0.82] | 0.16 | 0.20 | 0.40 | gemini-3.8-flash | kaldı |
+| gemini-3.6-flash | 0.35 | [0.22, 0.52] | 0.00 | 0.10 | 0.55 | gemini-3.1-pro | kaldı |
+| kimi-k3 (n=5) | 0.21 | [0.14, 0.44] | 0.00 | 0.00 | 0.40 | glm-5.3-flash | kaldı |
+
+- Ortalama: üretilen → doğru etiket 0.307 (gerçek 0.433), doğru lab 0.643 (gerçek 0.743).
+- GLM'ler v1'e göre belirgin iyi: lab düzeyinde 0.55 / 0.30 (v1: 0.25 / 0.23). T2, v1'deki "Claude gibi görünme"yi
+  kırmış.
+- Gemini flash modellerinin metinleri tanınmıyor; gemini-3.6-flash'ınkiler çoğunlukla gemini-3.1-pro'ya gidiyor.
+- GPT-5.6 üçlüsü birbirine kayıyor: sol'un üretilenleri terra'ya, terra'nınkiler luna'ya.
+- Kimi-K3 her şablonda zayıf: DEV 0.30–0.51, EVAL 0.21.
+- Uzunluk tutuyor: üretilen/hedef medyanı 0.96–1.04. Markdown neredeyse yok (sonnet-5 %10, opus-4-6 %5).
+
+**Maliyet:** Kaggle 4,933 $ (proxy kotası; tavan 5 $), Featherless 1,0105 $ (tavan 1 $; 0,0105 $ eş zamanlı istek
+aşımı, düzeltildi). Ayrıntılar PLAN.md'de.
+
+**CV kontrolü** (satırlar 504–535; aynı fold'lar, üretilmiş satırlar yalnız eğitim fold'larında):
+- Bir satır, prompt'u doğrulamadayken o fold'dan çıkarılıyor. İç sıcaklık bölmelerinde de aynı kural.
+- 15 etiketin T2 metinleri: 414 satır, eğitim fold'u başına ~330 (resmi ~2.160 satırın ~%15'i).
+- Hücrelerde BA / log loss (eşli fark, %95 GA).
+
+| üye (üretilmiş metin yok) | w=0.3 | w=1.0 | yalnız geçen 10 etiket, w=0.3 | geçen 10 etiket, w=1.0 |
+|---|---|---|---|---|
+| ng_fw 0.3674 / 1.892 | 0.3671 / 1.880 (−0.000 [−0.011, +0.010]) | 0.3730 / 1.879 (+0.006 [−0.005, +0.016]) | 0.3722 / 1.880 (+0.005 [−0.005, +0.014]) | 0.3696 / 1.881 (+0.002 [−0.009, +0.013]) |
+| ng_fwsh 0.3674 / 1.816 | 0.3671 / 1.818 (−0.000 [−0.013, +0.012]) | 0.3700 / 1.813 (+0.003 [−0.010, +0.014]) | 0.3700 / 1.815 (+0.003 [−0.007, +0.013]) | 0.3719 / 1.817 (+0.004 [−0.007, +0.016]) |
+| stil2 0.3382 / 1.917 | 0.3400 / 1.903 (+0.002 [−0.004, +0.008]) | 0.3378 / 1.908 (−0.000 [−0.009, +0.009]) | 0.3352 / 1.908 (−0.003 [−0.009, +0.003]) | 0.3356 / 1.915 (−0.003 [−0.013, +0.008]) |
+| stil+tok LR 0.2993 / 2.028 | 0.2956 / 2.016 (−0.004 [−0.010, +0.003]) | 0.2952 / 2.026 (−0.004 [−0.015, +0.006]) | 0.3008 / 2.021 (+0.002 [−0.005, +0.008]) | 0.2952 / 2.028 (−0.004 [−0.013, +0.005]) |
+| SVC char 0.3249 / 2.061 | 0.3252 / 2.046 (+0.000 [−0.007, +0.008]) | 0.3237 / 2.051 (−0.001 [−0.013, +0.011]) | 0.3260 / 2.053 (+0.001 [−0.006, +0.009]) | 0.3156 / 2.063 (−0.009 [−0.020, +0.002]) |
+| charword 0.3471 / 2.036 | 0.3500 / 2.010 (+0.003 [−0.007, +0.012]) | 0.3478 / 2.001 (+0.001 [−0.010, +0.011]) | 0.3504 / 2.017 (+0.003 [−0.006, +0.013]) | 0.3467 / 2.013 (−0.000 [−0.011, +0.010]) |
+
+Blend: cpu2 ile aynı iç içe hill-climb; sınıf başı bias da iç içe (`ext_blend.py`).
+
+| varyant | BA | eşli fark | BA, bias ile | eşli fark, bias ile | log loss |
+|---|---|---|---|---|---|
+| baseline (cpu2) | 0.4038 | – | 0.3960 | – | 1.717 |
+| üretilmiş metinle eğitilmiş üyeler, 15 etiket, w=0.3 | 0.4063 | +0.003 [−0.008, +0.013] | 0.3990 | +0.003 [−0.010, +0.016] | 1.701 |
+| birleşik (eski + yeni üyeler aday), 15 etiket, w=0.3 | 0.4074 | +0.004 [−0.006, +0.013] | 0.3960 | +0.000 [−0.011, +0.012] | 1.703 |
+| üretilmiş metinle eğitilmiş üyeler, 15 etiket, w=1.0 | 0.4063 | +0.003 [−0.008, +0.013] | 0.3982 | +0.002 [−0.011, +0.016] | 1.716 |
+| birleşik, 15 etiket, w=1.0 | 0.4048 | +0.001 [−0.008, +0.009] | 0.3960 | +0.000 [−0.012, +0.012] | 1.713 |
+| üretilmiş metinle eğitilmiş üyeler, geçen 10 etiket, w=0.3 | 0.4041 | +0.000 [−0.009, +0.010] | 0.3993 | +0.003 [−0.008, +0.014] | 1.707 |
+| birleşik, geçen 10 etiket, w=0.3 | 0.4093 | +0.006 [−0.003, +0.014] | 0.4008 | +0.005 [−0.006, +0.016] | 1.708 |
+| üretilmiş metinle eğitilmiş üyeler, geçen 10 etiket, w=1.0 | 0.4067 | +0.003 [−0.007, +0.013] | 0.3941 | −0.002 [−0.013, +0.010] | 1.708 |
+| birleşik, geçen 10 etiket, w=1.0 | 0.4074 | +0.004 [−0.005, +0.012] | 0.3982 | +0.002 [−0.009, +0.014] | 1.704 |
+
+- Sekiz varyantın hepsinde BA farkı gürültü içinde; nokta tahminleri 0 ile +0.006 arası. En iyisi (+0.006) sekiz
+  varyant arasından seçilmiş bir değer.
+- Log loss her varyantta biraz iyileşiyor: 1.717 → 1.701–1.716.
+- Korpusun aksine zarar yok.
+- Sınıf başına recall (bias ile), sekiz varyant (taban: cpu2):
+  - gpt-5.6-luna her varyantta düşüyor: −0.04 ile −0.18 arası (taban 0.40).
+    - Üretilen terra metinleri luna'ya benziyor; EVAL'de terra'nın üretilenleri en çok luna'ya gidiyor. Bunlar terra
+      etiketiyle eğitime girince luna'ya benzeyen metinler terra'ya kayıyor: terra çoğu varyantta artıyor (−0.01 ile
+      +0.09 arası, taban 0.17).
+    - Yalnız geçen etiketlerde de aynı; sol çıkıyor, terra kalıyor. w=0.3'te luna −0.13, terra +0.08.
+    - r yalnız kendi etiketinin olasılığına bakıyor; bir kardeşe benzemeyi cezalandırmıyor.
+  - glm-5.3-flash her varyantta artıyor: +0.03 ile +0.09 arası (taban 0.05).
+  - Diğer etiketlerdeki değişimler −0.06 ile +0.08 arası; etiket başına ~150 satırla gürültü düzeyinde.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
