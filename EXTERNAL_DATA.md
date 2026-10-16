@@ -46,6 +46,29 @@ birleştirilmedi, `quarantine_luna_*` dışarıda. Kod: `src/ext_corpus.py` (yü
     Gödel, Fermi paradoksu, entropi gibi aynı konular); geri kalanı woog, Crownelius ve speechmap.
   - Bu satırlar, eşleştikleri prompt_id doğrulamadayken o fold'un eğitiminden çıkarılıyor.
   - Dış verinin geneli resmi konulardan uzak: en iyi benzerliğin medyanı 0.03.
+- **Etiketi güvenilmez görünenler** (resmi train ile eğitilen modelin dış metinleri tanıma oranı; EXPERIMENTS.md):
+  - glm-5.3, glm-5.3-flash, kimi-k3 ve qwen3.8-max her kaynakta aile düzeyinde %1–9 tanınıyor.
+  - eqbench4'ün gemini-3.1-pro-preview satırları aile düzeyinde %5.6 tanınıyor; speechmap'te aynı etiket %62.5.
+- **Transfer:** yalnız dış veriyle eğitilen model resmi train'de BA 0.092 (şans 0.056).
+- **CV etkisi: zararlı.**
+  - Tüm CPU üyeleri, her ağırlıkta (0.05, 0.3, 1.0) ve temiz alt kümede de BA kaybediyor: −0.026 ile −0.119 arası,
+    %95 GA'ların hepsi sıfırın altında.
+  - Blend'de anlamlı kazanç yok. Ayrıntı: EXPERIMENTS.md "Dış derlem ... ikinci değerlendirme".
+- **Durum: kullanılmıyor.**
+  - Bayrak kodda duruyor, varsayılan kapalı: `--ext ntl_short --ext-weight W` (üye betikleri, `replay.py --ext`).
+  - Bir Kaggle not defterinde açılırsa dataset input olarak eklenir: `kaggle/build_submission.py --ext-dataset`.
+    Kopyalanmaz, yeniden yüklenmez.
+
+## Kaggle Benchmarks model proxy (16 Ekim; yalnız kontrol)
+
+- **Ne:** Kaggle'ın benchmark task'larında modelleri çağıran proxy.
+  - Kullanıcının kotası: günlük 10 $, aylık 100 $ (SDK'daki salt-okunur kota uç noktasından doğrulandı).
+  - Katalogda 18 etiketten 12'si birebir var (liste: PLAN.md).
+- **Durum:** hiçbir metin üretilmedi.
+  - Üretim yalnız kullanıcı onayından sonra, Kaggle altyapısında private bir task olarak yapılacak; yerel proxy
+    token'ı ile toplu üretim yok.
+  - Plan PLAN.md'de.
+- **Not:** çıktılar sağlayıcı şartlarına tabi; Kaggle Benchmarks'ın kullanım şartları ayrıca okunmalı.
 
 
 Tokenizer dosyaları veri değil, ön-eğitimli varlık sayılır; kaynakları ve lisansları `MODELS_LICENSES.md`'de.
