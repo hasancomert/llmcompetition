@@ -55,6 +55,10 @@ def tag_suffix(a) -> str:
 def describe(a) -> str:
     if getattr(a, "ext", "none") == "none":
         return ""
+    if a.ext == "ft2":
+        return (f"; + GENERATED training rows (fit test v2 texts, template {a.ext_template}, weight {a.ext_weight:g}"
+                f"{', dropped labels ' + a.ext_drop_labels if getattr(a, 'ext_drop_labels', '') else ''}; training folds "
+                f"only, each row left out while its train prompt is validated)")
     return (f"; + EXTERNAL training rows ({a.ext}, weight {a.ext_weight:g}, licenses {a.ext_licenses}"
             f"{', dropped sources ' + a.ext_drop_sources if a.ext_drop_sources else ''}"
             f"{', dropped labels ' + a.ext_drop_labels if getattr(a, 'ext_drop_labels', '') else ''}; training folds only, "

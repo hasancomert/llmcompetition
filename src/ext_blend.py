@@ -19,6 +19,7 @@ p(c) * (1/18) / pi_train(c), renormalised, where pi_train(c) is the class share 
 Reports per variant: nested BA / log loss without and with biases, paired bootstrap vs the baseline (same
 treatment), per-class recall and its change, and the confusions of the glm / kimi / qwen / gemini pairs.
 Usage: python ext_blend.py --suffix _ext-ntl_short-w0.3 [--suffix _ext-ntl_short-w1 ...] [--log]
+       python ext_blend.py --suffix _ext-ft2-T2-w0.3 --suffix _ext-ft2-T2-w1 --log   (fit test v2 texts)
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from common import CLASSES, K, encode_y, iter_folds, load_folds, load_member, lo
 from compare import fmt, paired_bootstrap
 from family_combine import apply_bias, fit_bias
 import ext_corpus
+import ft2_rows
 import hill_climb  # noqa: E402  (reuse/airline)
 
 BASE = ["tfidf_char_svc_C0.3", "tfidf_charword_lr_C30", "lr_style_tok_v2", "ng_char-word-fw_lr_C100_T",
@@ -151,7 +153,8 @@ def main():
         print(f"  confusions (bias): {r['confusions_bias']}")
     print("\nper-class recall (nested blend + nested bias):")
     print(rec.to_string())
-    out = ext_corpus.D / f"ext_blend{'_'.join(s.replace('_ext-', '') for s in a.suffix)}.json"
+    out_dir = ft2_rows.OUT if all("_ext-ft2" in sfx for sfx in a.suffix) else ext_corpus.D
+    out = out_dir / f"ext_blend{'_'.join(s.replace('_ext-', '') for s in a.suffix)}.json"
     out.write_text(json.dumps({"members": members, "variants": res, "swapped": swapped}, indent=1))
     if a.log:
         for n in variants:
