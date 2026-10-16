@@ -24,11 +24,12 @@ import time
 
 import numpy as np
 
-from common import K, encode_y, load_folds, load_member, load_test, load_train, log_experiment, run_member, scores
+from common import K, OUT, encode_y, load_folds, load_member, load_test, load_train, log_experiment, run_member, scores
 from compare import fmt, paired_bootstrap
 from emb_kernel import combined_gram, cosine_kernel, fit_head, kcoords, layer_info, rbf_kernel
 
 REF = "emb_qwen3_8b_base_C0.001"
+CAND = OUT / "kgram" / "cand"
 
 
 def parse_blocks(spec):
@@ -167,6 +168,9 @@ def main():
         print(f"C={C:g}: BA {s['ba']:.4f} ({s['ba_fold_mean']:.4f} ± {s['ba_fold_std']:.4f}) ll {s['logloss']:.4f} | "
               f"vs {REF}: {cmp}", flush=True)
         change = f"{desc}, C={C:g}"
+        CAND.mkdir(parents=True, exist_ok=True)                   # OOF of every run, for blend_check_raw.py
+        np.save(CAND / f"{args.save or args.name or 'embraw'}_C{C:g}.npy", oofs[C])
+        np.save(CAND / f"{args.save or args.name or 'embraw'}_C{C:g}.test.npy", tests[C])
         note = (args.note + "; " if args.note else "") + f"paired vs {REF}: {cmp}"
         if args.save:
             run_member(args.save, change, oofs[C], tests[C], y, folds, T0, note=note, blocks=args.blocks, C=C,

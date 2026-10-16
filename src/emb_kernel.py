@@ -111,8 +111,9 @@ def kcoords(Kfull, trn, ev, power=1.0, drop_top=0, center=False, eps=1e-10):
     lam, U = lam[keep], U[:, keep]
     if drop_top:
         lam, U = lam[drop_top:], U[:, drop_top:]
-    Ptr = U * lam ** (power / 2)
-    Pev = Kev @ (U * lam ** (power / 2 - 1))
+    a = np.sqrt(lam.sum() / (lam ** power).sum())      # keep the total variance, so C stays comparable
+    Ptr = a * U * lam ** (power / 2)
+    Pev = a * Kev @ (U * lam ** (power / 2 - 1))
     return Ptr, Pev, lam
 
 
@@ -138,7 +139,7 @@ def fit_head(head, C, Ptr, ytr, Pev, groups_tr=None, sample_weight=None):
     from sklearn.linear_model import LogisticRegression, RidgeClassifier
     from sklearn.svm import LinearSVC
     if head == "lr":
-        m = LogisticRegression(C=C, max_iter=5000, tol=1e-5).fit(Ptr, ytr, sample_weight=sample_weight)
+        m = LogisticRegression(C=C, max_iter=3000).fit(Ptr, ytr, sample_weight=sample_weight)
         P = np.zeros((len(Pev), K))
         P[:, m.classes_] = m.predict_proba(Pev)
         return P
