@@ -95,14 +95,16 @@ def main():
     y, folds, g = encode_y(tr["model"]), load_folds(tr), tr["prompt_id"].values
     variants = {"baseline": BASE}
     swapped, prior = {}, {}
-    ext_counts = np.bincount(encode_y(ext_corpus.load()["label"]), minlength=K).astype(float)
+    ext_counts = (np.bincount(encode_y(ext_corpus.load()["label"]), minlength=K).astype(float)
+                  if any("ntl_short" in sfx for sfx in a.suffix) else None)
     off_counts = np.bincount(y, minlength=K) * 0.8                      # official rows in a training fold
     for sfx in a.suffix:
         rep = [t + sfx if exists(t + sfx) else t for t in BASE]
         swapped[sfx] = [t for t in BASE if exists(t + sfx)]
         variants[f"ext{sfx}"] = rep
-        variants[f"prior{sfx}"] = rep
-        prior[f"prior{sfx}"] = float(sfx.split("-w")[1].split("-")[0])
+        if "ntl_short" in sfx:                                            # corpus rows: strongly unbalanced labels
+            variants[f"prior{sfx}"] = rep
+            prior[f"prior{sfx}"] = float(sfx.split("-w")[1].split("-")[0])
         variants[f"union{sfx}"] = BASE + [t + sfx for t in swapped[sfx]]
     members = {}
     for sfx in a.suffix:                                                  # member-level effect of the external rows
@@ -149,7 +151,7 @@ def main():
         print(f"  confusions (bias): {r['confusions_bias']}")
     print("\nper-class recall (nested blend + nested bias):")
     print(rec.to_string())
-    out = ext_corpus.D / f"ext_blend{'_'.join(s.replace('_ext-ntl_short-', '') for s in a.suffix)}.json"
+    out = ext_corpus.D / f"ext_blend{'_'.join(s.replace('_ext-', '') for s in a.suffix)}.json"
     out.write_text(json.dumps({"members": members, "variants": res, "swapped": swapped}, indent=1))
     if a.log:
         for n in variants:
@@ -157,7 +159,7 @@ def main():
                 continue
             r = res[n]
             sb = scores(y, preds[n][1], folds)
-            log_experiment(f"extblend_{n.replace('_ext-ntl_short-', '_')}",
+            log_experiment(f"extblend_{n.replace('_ext-ntl_short-', '_').replace('_ext-', '_')}",
                            f"CPU per-text blend (nested hill-climb, logprob/logloss) + nested per-class BA biases; "
                            f"members {', '.join(r['members'])} (ext_blend.py; external rows in training folds only)",
                            sb, time.time() - t0,
