@@ -11,6 +11,11 @@ accuracy, nested the same way: per fold, additive log-prob biases fitted on the 
 blend (family_combine.fit_bias, coordinate ascent on BA) and applied to the held-out rows. All OOF rows are official
 texts (external rows only ever trained the members).
 
+Variant "prior<suffix>": the external-data members with an analytic label-shift correction before blending:
+p(c) * (1/18) / pi_train(c), renormalised, where pi_train(c) is the class share of the members' training weight
+(official training rows + weight * external rows of class c). It removes the class prior the external rows bring in
+(e.g. claude-opus-4-6 4.767 rows vs gemini flash 71-83) without fitting anything.
+
 Reports per variant: nested BA / log loss without and with biases, paired bootstrap vs the baseline (same
 treatment), per-class recall and its change, and the confusions of the glm / kimi / qwen / gemini pairs.
 Usage: python ext_blend.py --suffix _ext-ntl_short-w0.3 [--suffix _ext-ntl_short-w1 ...] [--log]
@@ -72,6 +77,14 @@ def conf(y, P, a, b):
     return int(((y == ia) & (pred == ib)).sum())
 
 
+def prior_fix(P, w_ext, ext_counts, off_counts):
+    """Divide out the training class prior (official rows weight 1 + external rows weight w_ext), uniform target."""
+    pi = off_counts + w_ext * ext_counts
+    pi = pi / pi.sum()
+    Q = P * ((1.0 / K) / pi)[None, :]
+    return Q / Q.sum(1, keepdims=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--suffix", action="append", required=True)
@@ -81,15 +94,30 @@ def main():
     tr = load_train()
     y, folds, g = encode_y(tr["model"]), load_folds(tr), tr["prompt_id"].values
     variants = {"baseline": BASE}
-    swapped = {}
+    swapped, prior = {}, {}
+    ext_counts = np.bincount(encode_y(ext_corpus.load()["label"]), minlength=K).astype(float)
+    off_counts = np.bincount(y, minlength=K) * 0.8                      # official rows in a training fold
     for sfx in a.suffix:
         rep = [t + sfx if exists(t + sfx) else t for t in BASE]
         swapped[sfx] = [t for t in BASE if exists(t + sfx)]
         variants[f"ext{sfx}"] = rep
+        variants[f"prior{sfx}"] = rep
+        prior[f"prior{sfx}"] = float(sfx.split("-w")[1].split("-")[0])
         variants[f"union{sfx}"] = BASE + [t + sfx for t in swapped[sfx]]
+    members = {}
+    for sfx in a.suffix:                                                  # member-level effect of the external rows
+        for t in swapped[sfx]:
+            r = paired_bootstrap(y, load_member(t)[0], load_member(t + sfx)[0], g)
+            members[t + sfx] = {"ba": f"{r['ba_a']:.4f} -> {r['ba_b']:.4f}", "diff": round(r["diff"], 4),
+                                "ci": [round(r["ci_lo"], 4), round(r["ci_hi"], 4)],
+                                "logloss": f"{r['ll_a']:.4f} -> {r['ll_b']:.4f}"}
+            print(f"member {t}{sfx}: {fmt(r)}", flush=True)
     res, preds = {}, {}
     for name, tags in variants.items():
         oofs = [load_member(t)[0] for t in tags]
+        if name in prior:                                                 # analytic prior fix of the ext members
+            oofs = [prior_fix(o, prior[name], ext_counts, off_counts) if "_ext-" in t else o
+                    for o, t in zip(oofs, tags)]
         P, Pb, w = nested(oofs, y, folds, bias=True)
         preds[name] = (P, Pb)
         s, sb = scores(y, P, folds), scores(y, Pb, folds)
@@ -122,7 +150,7 @@ def main():
     print("\nper-class recall (nested blend + nested bias):")
     print(rec.to_string())
     out = ext_corpus.D / f"ext_blend{'_'.join(s.replace('_ext-ntl_short-', '') for s in a.suffix)}.json"
-    out.write_text(json.dumps({"variants": res, "swapped": swapped}, indent=1))
+    out.write_text(json.dumps({"members": members, "variants": res, "swapped": swapped}, indent=1))
     if a.log:
         for n in variants:
             if n == "baseline":

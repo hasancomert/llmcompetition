@@ -1,9 +1,10 @@
 """Transfer tests for the external corpus (no CV model is changed; diagnostics only).
 
   ext2off   train on external rows only (all, or one source), predict EVERY official train text: BA, per-class
-            recall, confusion matrix. Head: char+word+fw n-gram streams (train_ngram.py), vectorizers fitted on the
-            external training texts, LogisticRegression C=--C with class-balanced sample weights (every label has the
-            same total weight, so recall is not driven by the corpus' label counts).
+            recall, confusion matrix. Head: char+word+fw n-gram streams (train_ngram.py); vocabulary fitted on the
+            official texts without labels (--vocab official, default; the feature space of the CV runs) or on the
+            external texts; LogisticRegression C=--C with class-balanced sample weights (every label has the same total
+            weight, so recall is not driven by the corpus' label counts).
   off2ext   train on ALL official rows (same streams, LR C=100 = the ng_char-word-fw member settings), predict every
             external row: per source x label accuracy, lab accuracy and mean P(claimed label). A source whose texts
             are recognised as their label far less often than other sources of the same label is suspect.
@@ -36,10 +37,20 @@ FEATS = "char+word+fw"
 NG = Namespace(no_sublinear=False, min_df=2, binary=False, no_idf=False, max_features=0)
 
 
-def vectorize(fit_texts: dict, apply: list):
+def vectorize(fit_texts: dict, apply: list, hashed: bool = False):  # noqa: C901
+    """Same streams as train_ngram.py. hashed=True: HashingVectorizer (2^21 columns) + TfidfTransformer instead of a
+    vocabulary (the char vocabulary of 24k texts needs >5 GB before pruning)."""
+    from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer
     out = [[] for _ in apply]
     for f in FEATS.split("+"):
         t = STREAMS[f][0]
+        if hashed:
+            kw = {k: v for k, v in STREAMS[f][1].items() if k != "max_features"}
+            hv = HashingVectorizer(n_features=2 ** 21, alternate_sign=False, norm=None, dtype=np.float32, **kw)
+            tf = TfidfTransformer(sublinear_tf=True).fit(hv.transform(fit_texts[t]))
+            for i, d in enumerate(apply):
+                out[i].append(tf.transform(hv.transform(d[t])))
+            continue
         v = make_vectorizer(f, NG).fit(fit_texts[t])
         for i, d in enumerate(apply):
             out[i].append(v.transform(d[t]))
@@ -64,7 +75,8 @@ def ext2off(a):
     sw = (len(ye) / max((cnt > 0).sum(), 1)) / cnt[ye]                     # equal total weight per present label
     Te = transformed_texts(FEATS, ext["text"].tolist())
     To = transformed_texts(FEATS, tr["text"].tolist())
-    Ae, Ao = vectorize(Te, [Te, To])
+    fit = To if a.vocab == "official" else Te                              # official: texts only, no labels
+    Ae, Ao = vectorize(fit, [Te, To], hashed=a.hashed)
     m = LogisticRegression(C=a.C, max_iter=3000, tol=1e-4).fit(Ae, ye, sample_weight=sw)
     P = np.zeros((len(tr), K))
     P[:, m.classes_] = m.predict_proba(Ao)
@@ -73,7 +85,9 @@ def ext2off(a):
     rec = recall_table(y, pred)
     cm = pd.crosstab(pd.Series(np.asarray(CLASSES)[y], name="true"), pd.Series(np.asarray(CLASSES)[pred], name="pred"))
     cm = cm.reindex(index=CLASSES, columns=CLASSES, fill_value=0)
-    name = f"ext2off_{a.source.replace('/', '_') if a.source else 'all'}{'_drop' + str(len(a.drop_source.split(';'))) if a.drop_source else ''}_C{a.C:g}"
+    name = (f"ext2off_{a.source.replace('/', '_') if a.source else 'all'}"
+            f"{'_drop' + str(len(a.drop_source.split(';'))) if a.drop_source else ''}_C{a.C:g}{'_hash' if a.hashed else ''}"
+            f"_v{a.vocab}")
     cm.to_csv(ext_corpus.D / f"transfer_{name}_confusion.csv")
     ba_present = float(np.mean([rec[CLASSES[i]] for i in present]))
     top_conf = {}
@@ -164,6 +178,10 @@ def main():
     ap.add_argument("--source", default="")
     ap.add_argument("--drop-source", default="")
     ap.add_argument("--C", type=float, default=30.0)
+    ap.add_argument("--hashed", action="store_true", help="hashed n-gram features (low memory)")
+    ap.add_argument("--vocab", default="official", choices=["official", "external"],
+                    help="ext2off vocabulary: fitted on the official texts (no labels; same feature space as the CV "
+                         "runs, low memory) or on the external training texts (~6 GB)")
     a = ap.parse_args()
     {"ext2off": ext2off, "off2ext": off2ext, "lift": lift}[a.cmd](a)
 

@@ -29,6 +29,7 @@ def add_args(ap):
     g.add_argument("--ext-licenses", default="open,open_terms,unknown",
                    help="license classes to keep (ext_corpus.LICENSE_CLASS)")
     g.add_argument("--ext-drop-sources", default="", help="';'-separated sources to leave out")
+    g.add_argument("--ext-drop-labels", default="", help="';'-separated labels whose external rows are left out")
     g.add_argument("--ext-dir", default="", help="dataset directory (default data/external/ntl_corpus)")
     g.add_argument("--ext-limit", type=int, default=0, help="smoke tests: keep a random subset of this size")
 
@@ -41,6 +42,8 @@ def tag_suffix(a) -> str:
         s += "-" + a.ext_licenses.replace(",", "+")
     if a.ext_drop_sources:
         s += f"-drop{len(a.ext_drop_sources.split(';'))}"
+    if getattr(a, "ext_drop_labels", ""):
+        s += f"-droplab{len(a.ext_drop_labels.split(';'))}"
     if a.ext_limit:
         s += f"-n{a.ext_limit}"
     return s
@@ -50,7 +53,8 @@ def describe(a) -> str:
     if getattr(a, "ext", "none") == "none":
         return ""
     return (f"; + EXTERNAL training rows ({a.ext}, weight {a.ext_weight:g}, licenses {a.ext_licenses}"
-            f"{', dropped sources ' + a.ext_drop_sources if a.ext_drop_sources else ''}; training folds only, "
+            f"{', dropped sources ' + a.ext_drop_sources if a.ext_drop_sources else ''}"
+            f"{', dropped labels ' + a.ext_drop_labels if getattr(a, 'ext_drop_labels', '') else ''}; training folds only, "
             f"topic-matched rows left out when their prompt_id is validated)")
 
 
@@ -85,6 +89,8 @@ def load(a, tr: pd.DataFrame | None = None) -> Ext | None:
     keep = df["license_class"].isin(a.ext_licenses.split(","))
     if a.ext_drop_sources:
         keep &= ~df["source"].isin(a.ext_drop_sources.split(";"))
+    if getattr(a, "ext_drop_labels", ""):
+        keep &= ~df["label"].isin(a.ext_drop_labels.split(";"))
     df = df[keep].reset_index(drop=True)
     if a.ext_limit and a.ext_limit < len(df):
         df = df.sample(n=a.ext_limit, random_state=0).reset_index(drop=True)

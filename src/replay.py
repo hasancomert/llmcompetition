@@ -11,6 +11,11 @@ Recipes (CV = nested, EXPERIMENTS.md):
   v4    blend_v3 members + n-gram fw member, lab and super-family specialists (8B emb, 4B emb, lp+style, n-gram fw),
         two nested family combiners blended 0.533 / 0.467 (blend_pt_gpu_ba, 0.4619)   [needs the 4 Qwen3 LMs]
 
+External training rows (extdata.py; OFF by default, cpu2 only): --ext ntl_short --ext-weight W re-runs the CPU members
+with the external corpus rows added to their training folds (member tags get the extdata suffix; blend weights stay
+those of the recipe). The corpus is read from the attached Kaggle dataset (--ext-dir auto: the directory under
+/kaggle/input that holds external_short_wide.parquet); it is never copied into the notebook or re-uploaded.
+
 Usage (notebook): python replay.py --recipe v4 --data-dir D --folds F --tokenizers-flat T --out submission.parquet
                   [--work /tmp/nllm_work --train-lm auto]       (GPU: LM features of the test are extracted here)
 Local check:      python replay.py --recipe cpu2 ... --precomputed-lm outputs/emb
@@ -145,8 +150,20 @@ def setup_lm(a, tr, te, t0):
             t0)
 
 
-def run_step(key, t0):
+EXT_STEPS = {"svc", "charword", "style_lr", "ng_fw", "ng_fwsh", "style2"}   # steps that accept extdata flags
+
+
+def find_ext_dir(spec: str) -> Path:
+    if spec != "auto":
+        return Path(spec)
+    hits = sorted(glob.glob("/kaggle/input/**/external_short_wide.parquet", recursive=True))
+    assert hits, "external corpus not attached (add olegzholobov/name-that-llm-response-corpus as a notebook input)"
+    return Path(hits[0]).parent
+
+
+def run_step(key, t0, extra=()):
     env_over, script, args = STEPS[key]
+    args = list(args) + list(extra)
     env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), **env_over)
     r = subprocess.run([sys.executable, str(HERE / script), *args], cwd=str(HERE), env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -168,18 +185,28 @@ def main():
     ap.add_argument("--train-lm", default="")
     ap.add_argument("--precomputed-lm", default="", help="LOCAL: link emb/lp/meta npy+json from this dir")
     ap.add_argument("--no-fallback", action="store_true", help="LOCAL CHECKS: raise instead of falling back")
+    ap.add_argument("--ext", default="none", choices=["none", "ntl_short"], help="external training rows (off)")
+    ap.add_argument("--ext-weight", type=float, default=0.3)
+    ap.add_argument("--ext-dir", default="auto")
     a = ap.parse_args()
     t0 = time.time()
     rec = RECIPES[a.recipe]
+    ext_args, sfx = [], ""
+    if a.ext != "none":
+        if a.recipe != "cpu2":
+            ap.error("--ext is wired for the cpu2 recipe only (the v4 combiners load fixed member tags)")
+        ext_args = ["--ext", a.ext, "--ext-weight", f"{a.ext_weight:g}", "--ext-dir", str(find_ext_dir(a.ext_dir))]
+        sfx = f"_ext-{a.ext}-w{a.ext_weight:g}"
+        log(f"EXTERNAL training rows ON: {' '.join(ext_args)}", t0)
     tr, te = setup_project(a, t0)
     try:
         if rec["needs_lm"]:
             setup_lm(a, tr, te, t0)
         for key in rec["steps"]:
-            run_step(key, t0)
+            run_step(key, t0, ext_args if key in EXT_STEPS else ())
         from common import CLASSES, K, encode_y, load_member, metrics
         import submission as sub_check  # reuse/airline/submission.py
-        w = rec["weights"]
+        w = {m + sfx: wt for m, wt in rec["weights"].items()}
         oofs = {m: load_member(m)[0] for m in w}
         tests = {m: load_member(m)[1] for m in w}
         assert all(t.shape == (len(te), K) for t in tests.values()), "member test predictions have the wrong shape"

@@ -26,8 +26,11 @@ every training set only (outer fold, inner temperature folds without rows topic-
 validation, inner held-out and test rows are official / test texts only. --ext-vocab official (default) fits the
 vectorizers on the training fold's official texts only (same feature space as without external rows; the external rows
 are only transformed), all = on the official texts + the external rows (needs ~6 GB per fold process: the char
-vocabulary of 26k texts is built before pruning). With external rows the head is fitted on the full training set
-first and the inner temperature fits are warm-started from it (lr; same optimum, fewer iterations).
+vocabulary of 26k texts is built before pruning). With external rows (lr head) every fit of the fold - the full
+training set and the 4 inner temperature fits - is warm-started from one model fitted on the external rows alone
+(rows topic-matched to any official prompt left out): it has seen no official row, so the inner held-out
+predictions stay honest, and the fits converge faster. (Warm-starting the inner fits from the full fit is NOT honest:
+lbfgs stops after 0-2 iterations, i.e. the inner models are the full model that saw the held-out rows.)
 
 Examples:
   python train_ngram.py --feats shapew --model lr --C 10
@@ -277,13 +280,18 @@ def _run_fold_ext(args, texts_tr, y_tr, g_tr, texts_va, texts_te, ext):
                 np.concatenate([np.ones(len(rows)), w_e[e_rows]]))
 
     t0 = time.time()
-    f = fit_logits(args, *train_set(np.arange(len(y_tr)), np.arange(len(y_e))))
     it = lambda g: getattr(getattr(g, "model", None), "n_iter_", [0])[0]
+    init = None
+    if args.model == "lr":                    # start point that has seen no official row (see the module docstring)
+        clean = np.array([i for i, s in enumerate(leak_e) if not s], dtype=int)
+        f_e = fit_logits(args, A_e[clean], y_e[clean], w_e[clean])
+        init = (f_e.model.coef_, f_e.model.intercept_)
+        print(f"  [ext fold] external-only start {time.time() - t0:.0f}s ({it(f_e)} it)", flush=True)
+    f = fit_logits(args, *train_set(np.arange(len(y_tr)), np.arange(len(y_e))), init=init)
     print(f"  [ext fold] {A_tr.shape[0]}+{A_e.shape[0]} rows x {A_tr.shape[1]} features: full fit {time.time() - t0:.0f}s "
           f"({it(f)} it)", flush=True)
     T = 1.0
     if needs_temperature(args):
-        init = (f.model.coef_, f.model.intercept_) if args.model == "lr" else None
         dec_in = np.zeros((len(y_tr), K))
         for itr, iva in StratifiedGroupKFold(4, shuffle=True, random_state=7).split(A_tr, y_tr, g_tr):
             held = set(g_tr[iva])
