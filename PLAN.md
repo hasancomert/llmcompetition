@@ -286,6 +286,34 @@ GPU bütçesi:
   - CPU blend 0.3923 → 0.4038.
   - Gönderim, deney betiklerini notebook'ta aynen yeniden oynatarak yapılıyor (`src/replay.py`, tarifler cpu2 / v4).
 - Dış derlem (olegzholobov/name-that-llm-response-corpus) CV'de zarar verdi; kullanılmıyor.
+  - 16 Ekim'deki ikinci değerlendirme (dal `featherless-extra-data`) de her ayarda zarar verdi.
+  - Kullanıcı kararı: bırakıldı. Bayrak kapalı kalıyor, kod silinmiyor.
+- 16 Ekim akşamı `nllm-submit-cpu2` gönderildi: CV 0.4038, public LB **0.375**. Sabahki CPU v1 0.362 idi (CV 0.392);
+  metin başına kazanç LB'ye taşındı.
+
+### GPU planı: 17–24 Ekim haftası (kota 30 saat; kullanıcı kararı: öncelik S6E10)
+
+Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda en fazla 2 GPU oturumu var.
+
+| iş | proje | GPU-saat (tahmin) | zaman (UTC) |
+|---|---|---|---|
+| `s6e10-pfn15-og-s1a` (fold 0–7, seed 1) | S6E10 | 11.1–11.8 | Cmt 00:20 → ~11:30–12:10 |
+| `s6e10-pfn15-og-s1b` (fold 8–14, seed 1) | S6E10 | 10.5–11.8 | Cmt 00:20 → ~10:50–12:10 |
+| v4 gönderim not defteri (`nllm-submit-gpu`, replay v4) | NLLM | ~1.0 | ilk boşalan slotta, ~Cmt 11:00 |
+| 12 katmanlı gömme (`nllm-gpu-embed-l12`) | NLLM | ~0.8 | ikinci slot boşalınca, ~Cmt 12:00 |
+| LoRA denemesi (`nllm-lora-probe2`, 2 fold) | NLLM | ~1.0 | ~Cmt 13:00 |
+| toplam | | ~24.4–26.4 | |
+| tampon (S6E10'un eksik birimleri için bir tekrar turu ~2.9 sa dahil) | | ~3.6–5.6 | |
+
+- Uyum testi v2'nin Kaggle tarafı (Benchmarks task'ları) CPU not defterinde çalışıyor; GPU kotası kullanmıyor.
+- Sığmayabilecek iş: LoRA deneme sonucu iyiyse 5 fold'luk tam LoRA koşusu (~2.5 sa) ve onunla yeni gönderim not
+  defteri (~1–1.5 sa).
+  - S6E10 üst sınırı kullanırsa bu ikisi bu haftaya sığmıyor; haftaya kalır.
+  - Kaydırmadan önce kullanıcıya sorulur.
+- Zamanlanmış görev (`trig_01D8v1ENzCjSmBXhwSz7P57e`, Cmt 00:35):
+  - Boş slot ve kota kontrolü yapıp sırayla push'lar.
+  - Slot yoksa S6E10 kernel'lerinin beklenen bitişinde tekrar dener.
+  - Gerçek GPU saatleri bu tabloya işlenir.
 - Yeni yön: metin başına sınıflandırıcıyı iyileştirmek. Sıra:
   1. Ham GPU harmanı, düz argmax (`--members v2raw --match-lambda 0`); kota açılınca gönderilecek.
   2. 12 katmanlı gömmeler (ham).
@@ -300,6 +328,10 @@ GPU bütçesi:
   `kaggle competitions submit -k hasancmert/<slug> -v <sürüm> -f submission.parquet` ile gönderir, beklenen CV'yi,
   gerekçeyi ve gelen public LB'yi bildiririm; LB `EXPERIMENTS.md`'ye yazılır. Günlük hak 5 (Kaggle her gönderimde
   kalanı yazıyor), final 2. Public LB yalnız kontrol amaçlı; karar yine CV'ye göre.
+- Gönderim serbestliği (16 Ekim akşamı): günde 1–5 gönderimi kendi kararımla yapabilirim. Sorun olduğunda kullanıcıya
+  sorarım.
+- GPU: S6E10 ile ortak haftalık 30 saat. Bu hafta öncelik S6E10'da. Kota yetmeyecekse LoRA ve gömme işleri haftaya
+  kaydırılmadan önce kullanıcıya söylenir.
 - Dış veri yalnız ücretsiz ve herkese açık, yalnız eğitimde; `EXTERNAL_DATA.md`'ye kaynak + lisans. Validation her zaman yarışma katları.
 - Para harcayan, bir şeyi public yapan ya da büyük yön değiştiren her adımdan önce sorulur. Kaggle dataset ve not defterleri private.
 - Kullanılan kod/model lisansları ticari kullanımı kısıtlamamalı; `MODELS_LICENSES.md`'ye yazılır.
