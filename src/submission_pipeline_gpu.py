@@ -1,14 +1,16 @@
-"""GPU submission (v2): members of the nested blend EXPERIMENTS.md blend_v3_emb_logloss + prompt matching.
+"""GPU submission (v3): prompt-centered members + nested blend + prompt clustering + soft matching.
 
-Members (all fitted on the 5 shared folds; test = fold average):
-  svc   char TF-IDF + LinearSVC C=0.3 + inner-fold softmax temperature   (train_tfidf.py --feats char --model svc)
-  lp    Qwen3 0.6B/1.7B/4B/8B token log-prob stats + style+tok v2 -> QuantileTransformer + LogReg C=0.1
-  emb4  Qwen3-4B-base pooled hidden states -> StandardScaler + LogReg C=C_EMB
-  emb8  Qwen3-8B-base pooled hidden states -> StandardScaler + LogReg C=C_EMB
+Members (all fitted on the 5 shared folds; test = fold average). "Centered" = every text's feature row minus the
+mean row of its unsupervised prompt cluster (matching.cluster_prompts, thr 0.92, clusters of < 3 texts unchanged):
+train texts are clustered together, test texts ON THEIR OWN; no labels or prompt ids are used for centering.
+  tfc    char TF-IDF (50k cols) centered + LinearSVC C=0.3 + inner-fold temperature  (train_tfidf_ctr.py)
+  lpc    Qwen3 0.6B/1.7B/4B/8B token log-prob stats + style+tok v2, centered -> Quantile + LogReg C=0.1
+  emb4c  Qwen3-4B-base pooled hidden states, centered -> StandardScaler + LogReg C=0.001
+  emb8c  Qwen3-8B-base pooled hidden states, centered -> StandardScaler + LogReg C=0.001
 LM features of train AND test are extracted here with src/gpu_embed.py (same code as the CV features), one
-subprocess per model. Blend = weighted log-probabilities; then clustering + soft Hungarian (matching.py).
-If any GPU step fails, the notebook falls back to the CPU-only v1 members (char+word LR + style+tok LR) so that a
-submission is always written.
+subprocess per model. Blend = weighted log-probabilities (nested hill-climb weights); then clustering + soft
+Hungarian (matching.py). If any GPU step fails, the notebook falls back to the CPU-only v1 members (char+word LR +
+style+tok LR) so that a submission is always written.
 
 Usage: python submission_pipeline_gpu.py --data-dir D --folds F --tokenizers-flat T --out submission.parquet
 """
@@ -27,9 +29,11 @@ import pandas as pd
 
 LM_MODELS = [("qwen3_0.6b_base", "0.6b-base"), ("qwen3_1.7b_base", "1.7b-base"),
              ("qwen3_4b_base", "4b-base"), ("qwen3_8b_base", "8b-base")]
-WEIGHTS = {"svc": 0.257, "lp": 0.257, "emb4": 0.229, "emb8": 0.257}   # blend_v3_emb_logloss final weights
-C_EMB, C_LP = 0.003, 0.1
-MATCH_MIN_ROWS, MATCH_LAMBDA, MATCH_THRESHOLD = 40, 4.0, 0.92
+WEIGHTS = {"tfc": 0.167, "lpc": 0.167, "emb4c": 0.167, "emb8c": 0.5}   # nested logloss hill-climb (EXPERIMENTS.md)
+C_EMB, C_LP = 0.001, 0.1
+TFC = argparse.Namespace(feats="char", max_features=50_000, thr=0.92, C=0.3, model="svc")
+CENTER_THRESHOLD = 0.92
+MATCH_MIN_ROWS, MATCH_LAMBDA, MATCH_THRESHOLD = 40, 2.0, 0.92
 V1_WEIGHTS = {"charword": 2 / 3, "style": 1 / 3}
 
 
@@ -84,9 +88,10 @@ def main():
 
     from common import CLASSES, K, cv_preds, encode_y, metrics
     from matching import cluster_prompts, match
-    from train_emb import fold_fit
+    from train_emb import center_groups, fold_fit
     from train_gbdt import build
     import train_tfidf
+    import train_tfidf_ctr
     import submission as sub_check  # reuse/airline/submission.py
 
     d = Path(args.data_dir)
@@ -105,8 +110,18 @@ def main():
 
     members_oof, members_te = {}, {}
     gpu_ok = False
+    texts = tr["text"]
     if not args.cpu_only:
         try:
+            g_tr = cluster_prompts(texts.tolist(), CENTER_THRESHOLD)       # unsupervised prompt clusters
+            if n_te >= MATCH_MIN_ROWS:
+                g_te = cluster_prompts(te["text"].tolist(), CENTER_THRESHOLD)
+                ctr_te = lambda X: center_groups(X, g_te)
+            else:                                                       # too few test rows to cluster
+                ctr_te = lambda X: X - X.mean(0)
+            ctr_tr = lambda X: center_groups(X, g_tr)
+            log(f"centering clusters: train {len(np.unique(g_tr))}"
+                + (f", test {len(np.unique(g_te))}" if n_te >= MATCH_MIN_ROWS else ", test: global mean"), t0)
             if args.precomputed_lm:
                 pdir = Path(args.precomputed_lm)
                 g = lambda kind, n, split: np.load(pdir / f"{kind}_{n}_{split}.npy").astype(np.float32)
@@ -114,23 +129,27 @@ def main():
                      for n, _ in LM_MODELS}
             else:
                 F = extract_lm_features(tr, te, Path(args.work), t0)
-            lp_tr = np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr])
-            lp_te = np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te])
-            members_oof["lp"], members_te["lp"] = fold_fit("lp", C_LP, lp_tr, lp_te, y, folds)
-            log(f"member lp: OOF BA {metrics.balanced_accuracy(y, members_oof['lp']):.4f} (local CV 0.3279)", t0)
-            for key, name, ref in (("emb4", "qwen3_4b_base", "0.3956"), ("emb8", "qwen3_8b_base", "0.4008")):
-                members_oof[key], members_te[key] = fold_fit("emb", C_EMB, F[name][0], F[name][1], y, folds)
-                log(f"member {key}: OOF BA {metrics.balanced_accuracy(y, members_oof[key]):.4f} (local CV {ref})", t0)
+            lp_tr = ctr_tr(np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr]).astype(np.float32))
+            lp_te = ctr_te(np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te]).astype(np.float32))
+            members_oof["lpc"], members_te["lpc"] = fold_fit("lp", C_LP, lp_tr, lp_te, y, folds)
+            log(f"member lpc: OOF BA {metrics.balanced_accuracy(y, members_oof['lpc']):.4f} (local CV 0.4016)", t0)
+            for key, name, ref in (("emb4c", "qwen3_4b_base", "0.5498"), ("emb8c", "qwen3_8b_base", "0.5583")):
+                members_oof[key], members_te[key] = fold_fit("emb", C_EMB, ctr_tr(F[name][0]), ctr_te(F[name][1]),
+                                                             y, folds)
+                log(f"member {key}: OOF BA {metrics.balanced_accuracy(y, members_oof[key]):.4f} (local CV {ref})",
+                    t0)
+            del F
+            fp = train_tfidf_ctr.make_fit_predict(TFC, tr["prompt_id"].to_numpy())
+            members_oof["tfc"], members_te["tfc"] = cv_preds.cv_predict(fp, texts, y, te["text"], folds, K)[:2]
+            log(f"member tfc: OOF BA {metrics.balanced_accuracy(y, members_oof['tfc']):.4f} (local CV 0.3956)", t0)
             gpu_ok = True
         except Exception as e:  # never lose the submission to the GPU path
+            import traceback
+            traceback.print_exc()
             print(f"GPU members failed ({type(e).__name__}: {e}); falling back to the CPU v1 blend", flush=True)
+            members_oof, members_te = {}, {}
 
-    texts = tr["text"]
     if gpu_ok:
-        svc_args = argparse.Namespace(feats="char", model="svc", C=0.3, transductive=False)
-        fp = train_tfidf.make_fit_predict(svc_args, tr["prompt_id"].to_numpy())
-        members_oof["svc"], members_te["svc"] = cv_preds.cv_predict(fp, texts, y, te["text"], folds, K)[:2]
-        log(f"member svc: OOF BA {metrics.balanced_accuracy(y, members_oof['svc']):.4f} (local CV 0.3249)", t0)
         weights = WEIGHTS
     else:
         cw_args = argparse.Namespace(feats="char+word", model="lr", C=30.0, transductive=False)
@@ -140,8 +159,8 @@ def main():
         weights = V1_WEIGHTS
     oof = blend(members_oof, weights)
     P = blend(members_te, weights)
-    log(f"in-kernel OOF BA of the blend ({'v3 GPU' if gpu_ok else 'v1 CPU fallback'}): "
-        f"{metrics.balanced_accuracy(y, oof):.4f} (local nested CV {'0.4430' if gpu_ok else '0.3923'})", t0)
+    log(f"in-kernel OOF BA of the blend ({'v3 centered GPU' if gpu_ok else 'v1 CPU fallback'}): "
+        f"{metrics.balanced_accuracy(y, oof):.4f} (local nested CV {'0.5931' if gpu_ok else '0.3923'})", t0)
     try:  # diagnostic only
         om = match(oof, cluster_prompts(texts.tolist(), MATCH_THRESHOLD), MATCH_LAMBDA)
         log(f"in-kernel OOF BA after clustering + matching (lambda {MATCH_LAMBDA}): "

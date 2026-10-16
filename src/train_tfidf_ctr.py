@@ -20,53 +20,49 @@ from train_emb import center_by_clusters
 import train_tfidf
 
 
-def centered_dense(vecs, fit_texts, groups_of_texts, thr):
-    """Fit the vectorizers on fit_texts; return one centered dense matrix per text list in groups_of_texts."""
-    out = []
-    mats = [[] for _ in groups_of_texts]
-    for v in vecs:
-        v.fit(fit_texts)
-        for i, t in enumerate(groups_of_texts):
-            mats[i].append(v.transform(t).toarray())
-    for i, t in enumerate(groups_of_texts):
-        X = np.hstack(mats[i]).astype(np.float32)
-        if len(t) >= 40:
-            X, _ = center_by_clusters(X, list(t), thr)
-        else:                                                # tiny sets cannot be clustered
-            X = X - X.mean(0)
-        out.append(X)
-    return out
+def center_rows(X, texts, thr):
+    """Cluster-mean centering of one set of texts (tiny sets, which cannot be clustered: global mean)."""
+    if len(texts) >= 40:
+        return center_by_clusters(X, list(texts), thr)[0]
+    return X - X.mean(0)
 
 
-def make_fit_predict(args, groups_all):
+def fit_member(args, tr_texts, y_tr, g_tr):
+    """Fit vectorizers + centered model on the training texts; returns predict(texts) -> probabilities.
+    predict() centers the given texts with clusters of those texts only (as the hidden test is centered).
+    g_tr (prompt ids of the training texts) is used only for the SVC's inner temperature split."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import StratifiedGroupKFold
     from sklearn.svm import LinearSVC
+    tr_texts = list(tr_texts)
+    vecs = []
+    for f in args.feats.split("+"):
+        v = train_tfidf.make_vec(f)
+        v.set_params(max_features=args.max_features)
+        vecs.append(v.fit(tr_texts))
 
-    def vecs():
-        res = []
-        for f in args.feats.split("+"):
-            v = train_tfidf.make_vec(f)
-            v.set_params(max_features=args.max_features)
-            res.append(v)
-        return res
+    def dense(texts):
+        return np.hstack([v.transform(texts).toarray() for v in vecs]).astype(np.float32)
 
+    A_tr = center_rows(dense(tr_texts), tr_texts, args.thr)
+    if args.model == "lr":
+        m = LogisticRegression(C=args.C, max_iter=3000, tol=1e-4).fit(A_tr, y_tr)
+        return lambda texts: m.predict_proba(center_rows(dense(list(texts)), list(texts), args.thr))
+    dec_in = np.zeros((len(y_tr), K))
+    for itr, iva in StratifiedGroupKFold(4, shuffle=True, random_state=7).split(A_tr, y_tr, g_tr):
+        # inner validation rows were centered with the whole training fold's clusters (prompts are grouped,
+        # so their clusters hold only inner-validation texts)
+        dec_in[iva] = LinearSVC(C=args.C, max_iter=5000).fit(A_tr[itr], y_tr[itr]).decision_function(A_tr[iva])
+    T = train_tfidf.fit_temperature(dec_in, y_tr)
+    svc = LinearSVC(C=args.C, max_iter=5000).fit(A_tr, y_tr)
+    return lambda texts: train_tfidf.softmax(
+        svc.decision_function(center_rows(dense(list(texts)), list(texts), args.thr)) * T)
+
+
+def make_fit_predict(args, groups_all):
     def fit_predict(X_tr, y_tr, X_va, X_te):
-        tr_texts, va_texts, te_texts = list(X_tr), list(X_va), list(X_te)
-        A_tr, A_va, A_te = centered_dense(vecs(), tr_texts, [tr_texts, va_texts, te_texts], args.thr)
-        if args.model == "lr":
-            m = LogisticRegression(C=args.C, max_iter=3000, tol=1e-4).fit(A_tr, y_tr)
-            return m.predict_proba(A_va), m.predict_proba(A_te)
-        g_tr = groups_all[X_tr.index.to_numpy()]
-        dec_in = np.zeros((len(y_tr), K))
-        for itr, iva in StratifiedGroupKFold(4, shuffle=True, random_state=7).split(A_tr, y_tr, g_tr):
-            # inner validation rows were centered with the whole training fold's clusters (prompts are grouped,
-            # so their clusters hold only inner-validation texts)
-            dec_in[iva] = LinearSVC(C=args.C, max_iter=5000).fit(A_tr[itr], y_tr[itr]).decision_function(A_tr[iva])
-        T = train_tfidf.fit_temperature(dec_in, y_tr)
-        svc = LinearSVC(C=args.C, max_iter=5000).fit(A_tr, y_tr)
-        return (train_tfidf.softmax(svc.decision_function(A_va) * T),
-                train_tfidf.softmax(svc.decision_function(A_te) * T))
+        predict = fit_member(args, list(X_tr), y_tr, groups_all[X_tr.index.to_numpy()])
+        return predict(list(X_va)), predict(list(X_te))
     return fit_predict
 
 

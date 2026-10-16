@@ -11,8 +11,9 @@ Usage: python pipeline_sim.py --raw svc=tfidf_char_svc_C0.3 --raw lp=<tag> --ctr
            --ctr emb8c=qwen3_8b_base:0.001 --ctr lpc=lps:qwen3_0.6b_base+qwen3_8b_base:0.1 \
            --weights svc=1,lp=1,emb4c=1,emb8c=1,lpc=1 --sims 3
 --ctr spec: name=[kind:]feat1+feat2:C with kind emb (default; StandardScaler + LogReg), lp (log-prob stats),
-lps (log-prob stats + style+tok v2, all centered) or style (style+tok v2 only; feats empty). lp/lps/style use the
-QuantileTransformer + scaler + LogReg pipeline, as train_emb.py.
+lps (log-prob stats + style+tok v2, all centered), style (style+tok v2 only; feats empty), tfidf / tfidfsvc (feats
+= train_tfidf analyzers, e.g. char; train_tfidf_ctr.fit_member with LogReg / LinearSVC + inner temperature,
+--tfidf-max-features columns per analyzer). lp/lps/style use the QuantileTransformer + scaler + LogReg pipeline, as train_emb.py.
 """
 from __future__ import annotations
 
@@ -32,12 +33,14 @@ def parse_ctr(spec):
     parts = rest.split(":")
     kind = parts[0] if len(parts) == 3 else "emb"
     feats = [f for f in parts[-2].split("+") if f]
-    assert kind in ("emb", "lp", "lps", "style"), kind
+    assert kind in ("emb", "lp", "lps", "style", "tfidf", "tfidfsvc"), kind
     return name, kind, feats, float(parts[-1])
 
 
 def ctr_matrix(kind, feats, tr):
-    """Raw (uncentered) training matrix of a centered member, in train.csv row order."""
+    """Raw (uncentered) training matrix of a centered member, in train.csv row order (None for tfidf: per fold)."""
+    if kind.startswith("tfidf"):
+        return None
     mats = [load_feats("emb" if kind == "emb" else "lp", [f], "train")[0][0] for f in feats]
     if kind in ("lps", "style"):
         from train_gbdt import build
@@ -62,12 +65,14 @@ def main():
     ap.add_argument("--lams", default="0,2,4,8")
     ap.add_argument("--thr", type=float, default=0.92)
     ap.add_argument("--log", default="", help="EXPERIMENTS.md tag prefix (empty: do not log)")
+    ap.add_argument("--tfidf-max-features", type=int, default=50_000)
     a = ap.parse_args()
     t0 = time.time()
     tr = load_train()
     y = encode_y(tr["model"])
     folds = load_folds(tr)
     texts = tr["text"].tolist()
+    prompts = tr["prompt_id"].to_numpy()
     n_f = int(folds.max()) + 1
     weights = {kv.split("=")[0]: float(kv.split("=")[1]) for kv in a.weights.split(",")}
     raw = {kv.split("=")[0]: load_member(kv.split("=")[1])[0] for kv in a.raw}
@@ -77,9 +82,16 @@ def main():
     for nm, (kind, fl, C) in ctr_specs.items():            # training side: independent of the simulation
         for k in range(n_f):
             trn = np.flatnonzero(folds != k)
+            if kind.startswith("tfidf"):                  # a predict(texts) closure that centers its own input
+                import train_tfidf_ctr
+                targs = argparse.Namespace(feats="+".join(fl), max_features=a.tfidf_max_features, thr=a.thr, C=C,
+                                           model="svc" if kind == "tfidfsvc" else "lr")
+                models[nm, k] = train_tfidf_ctr.fit_member(targs, [texts[i] for i in trn], y[trn], prompts[trn])
+                continue
             Xc, _ = center_by_clusters(feats[nm][trn], [texts[i] for i in trn], a.thr)
             models[nm, k] = make_model("emb" if kind == "emb" else "lp", C).fit(Xc, y[trn])
-        print(f"fitted centered member {nm} ({kind}: {'+'.join(fl)}, {feats[nm].shape[1]} cols, C={C}) on "
+        ncol = feats[nm].shape[1] if feats[nm] is not None else f"<= {a.tfidf_max_features} per analyzer"
+        print(f"fitted centered member {nm} ({kind}: {'+'.join(fl)}, {ncol} cols, C={C}) on "
               f"{n_f} training folds  ({time.time() - t0:.0f}s)", flush=True)
     lo, hi = map(float, a.keep.split(","))
     lams = [float(x) for x in a.lams.split(",")]
@@ -94,6 +106,9 @@ def main():
             for k in range(n_f):
                 loc = np.flatnonzero(fk == k)
                 rws = keep[loc]
+                if ctr_specs[nm][0].startswith("tfidf"):
+                    Pn[loc] = models[nm, k]([texts[i] for i in rws])
+                    continue
                 Xc, _ = center_by_clusters(feats[nm][rws], [texts[i] for i in rws], a.thr)
                 m = models[nm, k]
                 Pn[np.ix_(loc, m.classes_)] = m.predict_proba(Xc)

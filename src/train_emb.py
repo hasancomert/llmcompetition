@@ -63,12 +63,17 @@ def center_by_clusters(X, texts, thr, min_size=3):
     would become an all-zero row)."""
     from matching import cluster_prompts
     g = cluster_prompts(texts, thr)
+    return center_groups(X, g, min_size), g
+
+
+def center_groups(X, g, min_size=3):
+    """Subtract each group's mean (groups of < min_size rows unchanged)."""
     Xc = X.copy()
     for c in np.unique(g):
         ix = g == c
         if ix.sum() >= min_size:
             Xc[ix] -= X[ix].mean(0)
-    return Xc, g
+    return Xc
 
 
 def center_sim(Xtr_raw, y, folds, texts, thr, C, sims, seed=0):

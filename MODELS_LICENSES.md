@@ -52,6 +52,13 @@ Notlar:
 
 `reuse/ev/`, `reuse/airline/`: kullanıcının kendi önceki projelerinden; içerikleri değiştirilmeden kullanılıyor.
 
-## LLM ağırlıkları (Adım 3 ve sonrası, henüz kullanılmadı)
+## LLM ağırlıkları (Adım 3; yalnız Kaggle Models olarak not defterine bağlandı, hiçbir yere indirilmedi)
 
-Planlanan: Qwen3 ailesi (Apache-2.0, resmi `qwen-lm` Kaggle Models). Eklendikçe bu tabloya yazılacak.
+| model | Kaggle kaynağı | resmi yayıncı mı | lisans | ticari kullanım | kullanım |
+|---|---|---|---|---|---|
+| Qwen3-0.6B-Base, 1.7B-Base, 4B-Base, 8B-Base | `qwen-lm/qwen-3/transformers/{0.6b-base,1.7b-base,4b-base,8b-base}/1` | evet | Apache-2.0 | evet | gömme + token log-olasılık özellikleri (gönderim v2/v3); 1.7B ile LoRA denemesi |
+| GLM-4-9B-0414 | `shelterw/glm/transformers/glm-4-9b-0414/1` | hayır (topluluk aynası; aslı zai-org/THUDM) | MIT | evet | gömme + log-olasılık özellikleri (değerlendiriliyor, gönderimde yok) |
+| Gemma 4 E4B, E2B | `google/gemma-4/transformers/{gemma-4-e4b,gemma-4-e2b}/1` | evet | Apache-2.0 | evet | denendi, çalışmadı (E4B fp16: CUDA launch failure; E2B fp32: T4'te bellek yetmedi); kullanılmıyor |
+
+Kaggle imajındaki GPU kütüphaneleri: torch 2.11 (BSD-3), transformers 5.16.1 (Apache-2.0), peft 0.20.0 (Apache-2.0),
+accelerate (Apache-2.0).
