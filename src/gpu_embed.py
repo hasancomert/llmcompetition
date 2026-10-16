@@ -99,6 +99,7 @@ def main():
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--max-len", type=int, default=512)
     ap.add_argument("--dtype", default="auto", choices=["auto", "fp16", "fp32", "bf16"])
+    ap.add_argument("--layer-fracs", default="0.25,0.5,0.75,1.0", help="pooled layers = round(frac * n_layers)")
     a = ap.parse_args()
     t0 = time.time()
     out = Path(a.out)
@@ -110,7 +111,8 @@ def main():
         df = pd.read_csv(path)
         split = Path(path).stem
         t1 = time.time()
-        E, L, names, layers = featurize(df["text"].tolist(), tok, model, batch=a.batch, max_len=a.max_len)
+        E, L, names, layers = featurize(df["text"].tolist(), tok, model, batch=a.batch, max_len=a.max_len,
+                                        layer_fracs=tuple(float(f) for f in a.layer_fracs.split(",")))
         np.save(out / f"emb_{a.name}_{split}.npy", E)
         np.save(out / f"lp_{a.name}_{split}.npy", L)
         (out / f"meta_{a.name}_{split}.json").write_text(json.dumps(

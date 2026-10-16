@@ -32,6 +32,7 @@ if __name__ == "__main__":
                   glob.glob("/kaggle/input/**/config.json", recursive=True), flush=True)
             continue
         t0 = time.time()
+        fracs = ["--layer-fracs", os.environ["EMB_LAYER_FRACS"]] if os.environ.get("EMB_LAYER_FRACS") else []
         r = subprocess.run([sys.executable, "src/gpu_embed.py", "--model-dir", d, "--name", name,
-                            "--texts", train, "--texts", test, "--out", "emb", "--dtype", dtype])
+                            "--texts", train, "--texts", test, "--out", "emb", "--dtype", dtype, *fracs])
         print(f"### {name}: exit {r.returncode} after {time.time() - t0:.0f}s", flush=True)

@@ -21,6 +21,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--slug", default="nllm-gpu-embed")
     ap.add_argument("--models", default=DEFAULT)
+    ap.add_argument("--layer-fracs", default="", help="comma-separated layer fractions (default: gpu_embed's 4)")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--fetch", action="store_true", help="download the kernel output into outputs/emb")
     a = ap.parse_args()
@@ -40,7 +41,8 @@ if __name__ == "__main__":
         ROOT / "outputs" / "kaggle_build", a.slug, "hasancmert",
         code_files={"src/gpu_embed.py": ROOT / "src" / "gpu_embed.py",
                     "src/gpu_run_embed.py": ROOT / "src" / "gpu_run_embed.py"},
-        commands=[f"EMB_MODELS={run_models} python src/gpu_run_embed.py"],
+        commands=[f"EMB_MODELS={run_models}" + (f" EMB_LAYER_FRACS={a.layer_fracs}" if a.layer_fracs else "")
+                  + " python src/gpu_run_embed.py"],
         competition="name-that-llm", models=sources, out_dirs=("emb",),
         gpu=True, internet=False, machine_shape="NvidiaTeslaT4")
     print("built", d, "models", sources)
