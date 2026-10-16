@@ -310,9 +310,12 @@ def main():
         test += p_te / len(splits)
     temps = [round(r[2], 3) for r in res]
     s = scores(y, oof, folds)
-    ref, _ = load_member(REF_TAG)
-    cmp = paired_bootstrap(y, ref, oof, groups)
-    cmp_txt = (f"vs {REF_TAG} (0.3471 / 2.0359): diff {cmp['diff']:+.4f} [{cmp['ci_lo']:+.4f}, {cmp['ci_hi']:+.4f}]")
+    try:                                      # reference only for the log; absent in a fresh replay (replay.py)
+        ref, _ = load_member(REF_TAG)
+        cmp = paired_bootstrap(y, ref, oof, groups)
+        cmp_txt = (f"vs {REF_TAG} (0.3471 / 2.0359): diff {cmp['diff']:+.4f} [{cmp['ci_lo']:+.4f}, {cmp['ci_hi']:+.4f}]")
+    except FileNotFoundError:
+        cmp_txt = f"vs {REF_TAG}: n/a (reference member absent)"
     print(f"[{tag}] BA {s['ba']:.4f} (folds {s['ba_fold_mean']:.4f} ± {s['ba_fold_std']:.4f}) "
           f"log loss {s['logloss']:.4f}; temps {temps}; {cmp_txt}; {time.time() - t0:.0f}s", flush=True)
     SCRATCH.mkdir(parents=True, exist_ok=True)

@@ -15,11 +15,15 @@ Views:
                 StandardScaler + LogReg (as the lp member of blend_v3_emb_logloss)
 Output: outputs/famspec/<view>_C<C>.npz (oof, test) for every C of the grid; within-family accuracy printed.
 
+FAMSPEC_GROUPS=super switches the families to super-families {claude, glm}, {gpt, kimi, qwen}, {gemini} (outputs
+prefixed sup_; family_combine.py must then run with the same setting).
+
 Usage: python family_spec.py --view emb:qwen3_8b_base --Cs 0.0003,0.001,0.003,0.01
 """
 from __future__ import annotations
 
 import argparse
+import os
 import time
 
 import numpy as np
@@ -27,7 +31,10 @@ import numpy as np
 from common import CLASSES, K, OUT, encode_y, lab_of, load_folds, load_test, load_train
 
 SPEC = OUT / "famspec"
-LABS = np.array([lab_of(c) for c in CLASSES])
+GROUPING = os.environ.get("FAMSPEC_GROUPS", "lab")      # lab | super ({claude, glm}, {gpt, kimi, qwen}, {gemini})
+SUPER = {"claude": "claude+glm", "glm": "claude+glm", "gpt": "gpt+kimi+qwen", "kimi": "gpt+kimi+qwen",
+         "qwen": "gpt+kimi+qwen", "gemini": "gemini"}
+LABS = np.array([lab_of(c) if GROUPING == "lab" else SUPER[lab_of(c)] for c in CLASSES])
 FAMS = sorted(set(LABS))
 FAM_OF_CLASS = np.array([FAMS.index(l) for l in LABS])
 MULTI = [f for f in range(len(FAMS)) if (FAM_OF_CLASS == f).sum() > 1]
@@ -161,7 +168,7 @@ def ng_view(feats, tr, te, y, folds, Cs):
 
 def save(view, C, oof, test):
     SPEC.mkdir(parents=True, exist_ok=True)
-    name = f"{view.replace(':', '_').replace(',', '+')}_C{C:g}"
+    name = ("sup_" if GROUPING == "super" else "") + f"{view.replace(':', '_').replace(',', '+')}_C{C:g}"
     np.savez(SPEC / f"{name}.npz", oof=oof, test=test)
     return name
 

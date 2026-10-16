@@ -232,6 +232,7 @@ def main():
     ap.add_argument("--save", action="store_true")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--note", default="")
+    ap.add_argument("--drop", default="", help="comma-separated column-name prefixes to drop, e.g. s2_pb_,s2_fw_")
     ap.add_argument("--bw", default="", help="block weights after standardisation, e.g. lp4=2,style2=0.5 (lr only)")
     args = ap.parse_args()
     tr, te = load_train(), load_test()
@@ -240,23 +241,31 @@ def main():
     folds = load_folds(tr)
     blocks = args.blocks.split("+")
     Xtr, Xte, names = build_blocks(blocks, tr, te)
+    if args.drop:
+        keep = [i for i, n in enumerate(names) if not n.startswith(tuple(args.drop.split(",")))]
+        Xtr, Xte, names = Xtr[:, keep], Xte[:, keep], [names[i] for i in keep]
     if args.bw:
         global COLW
         COLW = block_weights(names, args.bw)
     print(f"blocks {args.blocks}: {Xtr.shape[1]} cols", flush=True)
-    ref_oof, _ = load_member(REF)
+    try:                                      # reference only for the log; absent in a fresh replay (replay.py)
+        ref_oof, _ = load_member(REF)
+    except FileNotFoundError:
+        ref_oof = None
     Cs = [float(c) for c in args.Cs.split(",")] if args.Cs else [args.C]
     for C in Cs:
         t0 = time.time()
         oof, test, temps = run_cv(args.head, C, Xtr, Xte, y, g, folds, args.temp)
         tag = args.tag or (f"lpx_{args.blocks}_{args.head}_C{C:g}{'_T' if args.temp else ''}"
-                           + (f"_bw{args.bw.replace('=', '').replace(',', '_')}" if args.bw else ""))
-        r = paired_bootstrap(y, ref_oof, oof, g)
+                           + (f"_bw{args.bw.replace('=', '').replace(',', '_')}" if args.bw else "")
+                           + (f"_drop{args.drop.replace(',', '_')}" if args.drop else ""))
+        r = paired_bootstrap(y, ref_oof, oof, g) if ref_oof is not None else None
         change = (f"per-text {args.head} on {args.blocks} ({Xtr.shape[1]} cols)"
                   f"{', QuantileTransformer+scaler' if args.head in ('lr', 'gam', 'svc') else ''}, C/param={C:g}"
                   f"{', inner grouped temperature' if args.temp else ''}"
-                  f"{', block weights ' + args.bw if args.bw else ''} (train_lpx.py)")
-        note = (f"paired vs {REF}: {fmt(r)}"
+                  f"{', block weights ' + args.bw if args.bw else ''}"
+                  f"{', dropped column prefixes ' + args.drop if args.drop else ''} (train_lpx.py)")
+        note = (f"paired vs {REF}: {fmt(r) if r is not None else 'n/a (reference member absent)'}"
                 + (f"; temps {np.round(temps, 3).tolist()}" if args.temp else "")
                 + (f"; {args.note}" if args.note else ""))
         if args.save:
@@ -269,7 +278,7 @@ def main():
             np.savez(SCRATCH / f"{tag}.npz", oof=oof, test=test)
             print(f"[{tag}] BA {s['ba']:.4f} (folds {s['ba_fold_mean']:.4f} ± {s['ba_fold_std']:.4f}) "
                   f"log loss {s['logloss']:.4f}  {time.time() - t0:.0f}s", flush=True)
-        print("   " + fmt(r), flush=True)
+        print("   " + (fmt(r) if r is not None else "paired: n/a (reference member absent)"), flush=True)
 
 
 if __name__ == "__main__":

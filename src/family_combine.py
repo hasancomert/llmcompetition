@@ -27,7 +27,7 @@ from scipy.optimize import minimize
 from common import (CLASSES, K, OUT, encode_y, iter_folds, load_folds, load_member, load_train, log_experiment,
                     metrics, run_member, scores)
 from compare import fmt, paired_bootstrap
-from family_spec import FAM_OF_CLASS, FAMS, MULTI, SPEC
+from family_spec import FAM_OF_CLASS, FAMS, GROUPING, MULTI, SPEC
 
 import hill_climb  # noqa: E402  (reuse/airline)
 
@@ -249,11 +249,18 @@ def main():
         mask = FAM_OF_CLASS[None, :] == fsel[:, None]
         out = np.where(mask, out, out * 1e-3)
         out /= out.sum(1, keepdims=True)
-    ref, _ = load_member(REF)
+    try:                                      # reference only for the log; absent in a fresh replay (replay.py)
+        ref, _ = load_member(REF)
+    except FileNotFoundError:
+        ref = None
     sb, s = scores(y, base_nested, folds), scores(y, out, folds)
     print(f"base nested blend (recomputed): BA {sb['ba']:.4f} ll {sb['logloss']:.4f}  "
-          f"(max |diff| vs saved {REF}: {np.abs(base_nested - ref).max():.2e})")
-    cmp = fmt(paired_bootstrap(y, ref, out, g))
+          + (f"(max |diff| vs saved {REF}: {np.abs(base_nested - ref).max():.2e})" if ref is not None else ""))
+    cmp = fmt(paired_bootstrap(y, ref, out, g)) if ref is not None else "n/a (reference member absent)"
+    if a.extra_members:
+        cmp_base = fmt(paired_bootstrap(y, base_nested, out, g))
+        print(f"  paired vs recomputed base blend (+{'+'.join(a.extra_members)}): {cmp_base}")
+        cmp += f"; vs nested base blend + {'+'.join(a.extra_members)}: {cmp_base}"
     print(f"result: BA {s['ba']:.4f} (folds {s['ba_fold_mean']:.4f} ± {s['ba_fold_std']:.4f}) ll {s['logloss']:.4f}")
     print(f"  paired vs {REF}: {cmp}")
     if fold_params:
@@ -261,7 +268,9 @@ def main():
             print(f"  {FAMS[f]} params (mean of folds): {np.round(np.mean([p[f] for p in fold_params], 0), 3).tolist()}")
     if fold_bias:
         print(f"  BA biases (mean of folds): {dict(zip(CLASSES, np.round(np.mean(fold_bias, 0), 2)))}")
-    desc = (f"family combine: base {'+'.join(['blend_v3 members'] + a.extra_members)}"
+    if GROUPING != "lab":
+        print(f"  grouping {GROUPING}: {FAMS}")
+    desc = (f"family combine{' (super-families ' + '/'.join(FAMS) + ')' if GROUPING != 'lab' else ''}: base {'+'.join(['blend_v3 members'] + a.extra_members)}"
             f"{'; specialists ' + ', '.join(a.specs) if a.specs else ''}"
             f"{'; per-family' if a.per_family else ''}{f'; offsets L2 {a.offsets:g}' if a.offsets is not None else ''}"
             f"{'; nested BA biases' if a.bias else ''}{'; family-first decision' if a.famfirst else ''}")

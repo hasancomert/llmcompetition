@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--base", default="gpu", choices=list(BASES))
     ap.add_argument("--cand", nargs="+", required=True)
     ap.add_argument("--metric", default="logloss", choices=["ba", "logloss"])
+    ap.add_argument("--replace", default=REF, help="base member the candidate replaces (default: lp+style reference)")
     ap.add_argument("--log", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -49,8 +50,8 @@ def main():
     print(f"base {args.base} ({args.metric}): BA {metrics.balanced_accuracy(y, P0):.4f} "
           f"ll {metrics.mlogloss(y, P0):.4f} w {np.round(w0, 2).tolist()}")
     variants = []
-    if REF in base:
-        i = base.index(REF)
+    if args.replace in base:
+        i = base.index(args.replace)
         variants.append(("replace", oof_base[:i] + cands + oof_base[i + 1:], base[:i] + args.cand + base[i + 1:]))
     variants.append(("add", oof_base + cands, base + args.cand))
     out = []
@@ -66,7 +67,7 @@ def main():
         name, P1, _ = out[0]
         s = scores(y, P1, folds)
         log_experiment(f"lpxblend_{args.base}_{name}_{'+'.join(args.cand)}",
-                       f"nested hill-climb ({args.metric}) of the per-text '{args.base}' base set, lp+style reference "
+                       f"nested hill-climb ({args.metric}) of the per-text '{args.base}' base set, {args.replace} "
                        f"replaced by / added to {', '.join(args.cand)} (lpx_blend_check.py)", s, time.time() - t0,
                        note=" | ".join(o[2] for o in out) + "; blend check only, not saved")
 
