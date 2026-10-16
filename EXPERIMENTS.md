@@ -82,7 +82,10 @@ Diğer gözlemler:
 | `nllm-submit` v1: ham CPU harmanı + eşleştirme λ 2 | 0.392 | 0.43–0.45 | 0.356 |
 | `nllm-submit-nomatch` v1: aynı CPU harmanı, düz argmax | 0.392 | – | 0.362 |
 | `nllm-submit-ctrcpu` v1: merkezlenmiş tfc + stil, düz argmax | 0.4675 | – | 0.330 |
+| `nllm-submit-cpu2` v1 (akşam): metin başına CPU harmanı cpu2 (SVC, stil+tok, n-gram fw, fw+shapew, style2), düz argmax | 0.4038 | – | **0.375** |
 
+- **Metin başına CPU kazancı LB'ye taşındı:** cpu2 CV'de +0.012 (0.392 → 0.404), LB'de +0.013 (0.362 → 0.375).
+  CV ile LB arasındaki fark iki gönderimde de ~0.03.
 - **Eşleştirme** gizli testte işe yaramıyor (CPU: 0.362 → 0.356).
 - **Prompt merkezleme gizli testte zarar veriyor** (CPU: ham 0.362 → merkezlenmiş 0.330), CV +0.075 demişti.
 - `src/structure_sim.py` bunu yeniden üretiyor. Prompt başına 1–3 metin kalınca:
