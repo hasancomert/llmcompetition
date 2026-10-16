@@ -284,7 +284,10 @@ GPU bütçesi:
 ## 6. Çalışma kuralları (kullanıcıdan)
 
 - Kararlar CV'ye göre; her deney `EXPERIMENTS.md`'de (no, değişiklik, CV BA, CV log loss, varsa public LB). İşe yaramayanlar da yazılır.
-- Gönderimi kullanıcı yapar. Ben not defterini push'lar, gönderilecek sürümü, beklenen CV'yi ve gerekçeyi bildiririm.
+- Gönderim (16 Ekim'de değişti): kullanıcı gönderimleri benim yapıp skoru okumamı istedi. Not defterini push'lar,
+  `kaggle competitions submit -k hasancmert/<slug> -v <sürüm> -f submission.parquet` ile gönderir, beklenen CV'yi,
+  gerekçeyi ve gelen public LB'yi bildiririm; LB `EXPERIMENTS.md`'ye yazılır. Günlük hak 5 (Kaggle her gönderimde
+  kalanı yazıyor), final 2. Public LB yalnız kontrol amaçlı; karar yine CV'ye göre.
 - Dış veri yalnız ücretsiz ve herkese açık, yalnız eğitimde; `EXTERNAL_DATA.md`'ye kaynak + lisans. Validation her zaman yarışma katları.
 - Para harcayan, bir şeyi public yapan ya da büyük yön değiştiren her adımdan önce sorulur. Kaggle dataset ve not defterleri private.
 - Kullanılan kod/model lisansları ticari kullanımı kısıtlamamalı; `MODELS_LICENSES.md`'ye yazılır.
