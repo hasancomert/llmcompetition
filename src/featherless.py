@@ -8,7 +8,8 @@
 - Budget guard: the workstream budget is 8 USD. Before a request, the spent total + this request's worst case
   (estimated prompt tokens + max_tokens at the model's prices) must stay below ASK_AT (7 USD); otherwise BudgetStop
   is raised so that the user can be asked. An optional per-step cap (step_cap, USD, summed over `purpose` prefix)
-  is enforced the same way.
+  is enforced the same way. Requests in flight count with their worst case until their cost is logged (without this,
+  two concurrent requests could both pass the check and overshoot a cap: ft2 eval, 1.0105 USD for a 1 USD cap).
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ ASK_AT = 7.0
 _SEM = threading.Semaphore(2)
 _LOCK = threading.Lock()
 _PRICES: dict | None = None
+_HELD: list = []      # [purpose, worst-case USD] of requests in flight
 
 
 class BudgetStop(RuntimeError):
@@ -94,11 +96,24 @@ def chat(model: str, messages: list, purpose: str, max_tokens: int, temperature:
     est_prompt = sum(len(str(m.get("content", ""))) for m in messages) / 3.0 + 50
     worst = est_prompt * pin + max_tokens * pout
     with _LOCK:
-        total = spent()
+        total = spent() + sum(w for _, w in _HELD)
         if total + worst > ASK_AT:
-            raise BudgetStop(f"spent {total:.4f} USD + worst case {worst:.4f} would pass {ASK_AT} USD (budget {BUDGET_TOTAL})")
-        if step_cap is not None and spent(step_prefix or purpose) + worst > step_cap:
-            raise BudgetStop(f"step '{step_prefix or purpose}' cap {step_cap} USD reached ({spent(step_prefix or purpose):.4f} spent)")
+            raise BudgetStop(f"spent/held {total:.4f} USD + worst case {worst:.4f} would pass {ASK_AT} USD (budget {BUDGET_TOTAL})")
+        if step_cap is not None:
+            pre = step_prefix or purpose
+            step = spent(pre) + sum(w for q, w in _HELD if q.startswith(pre))
+            if step + worst > step_cap:
+                raise BudgetStop(f"step '{pre}' cap {step_cap} USD reached ({step:.4f} spent or held)")
+        ticket = [purpose, worst]
+        _HELD.append(ticket)
+    try:
+        return _send(model, messages, purpose, max_tokens, temperature, top_p, extra, timeout, max_attempts, pin, pout)
+    finally:
+        with _LOCK:
+            _HELD.remove(ticket)
+
+
+def _send(model, messages, purpose, max_tokens, temperature, top_p, extra, timeout, max_attempts, pin, pout) -> dict:
     body = {"model": model, "messages": messages, "max_tokens": max_tokens}
     if temperature is not None:
         body["temperature"] = temperature
