@@ -98,6 +98,26 @@ Diğer gözlemler:
 - Bütün gönderimlerde LB, argmax CV'nin ~0.03 altında. Olası sebepler: public %40'ın model karışımı farklı, ya da
   test metinleri biraz daha zor.
 
+## Metin başına iyileştirmeler (16 Ekim; 4 yönlü workflow + şüpheci doğrulama)
+
+Bütün sayılar iç içe ya da OOF; test metinleri tek tek işleniyor. Kaydedilen her üye ayrı bir ajanla doğrulandı:
+sklearn ile yeniden puanlandı, kodu sızıntı açısından okundu ve çoğu bit düzeyinde yeniden üretildi.
+
+| yön | sonuç | blend'e katkı |
+|---|---|---|
+| n-gram | Fonksiyon kelimesi akışı (içerik kelimeleri W, fonksiyon kelimeleri + noktalama, 1–3 gram) char+word TF-IDF'e eklendi. `ng_char-word-fw_lr_C100_T`: 0.3674 / 1.8915 (char+word 0.3471'e göre +0.020 [+0.005, +0.036]) | GPU blend 0.4430 → 0.4541 (+0.011 [+0.002, +0.021]) |
+| gömme başlıkları | Doymuş. En iyisi `emb_raw_4b+8b_concat_C0.001` 0.4138. Başlık türleri (SVC, RBF), beyazlatma, katman başına başlık, merkezli kopya ekleme işe yaramadı | yok |
+| stil + log-olasılık | Yeni `style2_features.py` (150 fonksiyon kelimesi frekansı vb.). `lpx_lp4glm_style2_C0.003_T` 0.3608 (+0.033); CPU'luk `lpx_style2_nolm_C0.003_T` 0.3382. Modeller arası lp oranları işe yaramadı | GPU'da yok (n-gram fw ile örtüşüyor), CPU'da var |
+| aile / karar | Aile uzmanları: yalnız bir ailenin metinleriyle eğitilmiş başlıklar, blend'in aile kütlesiyle iç içe birleştiriliyor. Süper aile {claude, glm}, {gpt, kimi, qwen}, {gemini} ve lab gruplaması. `famcsup6_s4q_pf` 0.4612, `famc6_lab_s4q_pf` 0.4615 (GLM'siz). Sınıf başına bias ayarı zarar verdi | Bu ikisinin blend'i `blend_pt_gpu_ba` **0.4619** / 1.5387: blend_v3'e göre +0.019 [+0.007, +0.031] |
+
+- **CPU blend:** `blend_pt_cpu_logloss` **0.4038** / 1.7172; CPU v1'e (0.3923) göre +0.012 [−0.003, +0.026].
+- **Seçim iyimserliği:** aile birleştiricilerinin yapılandırması ~20 OOF denemesi arasından seçildi; birleştirici
+  ağırlıkları ise iç içe.
+- **Gönderim yolu (`src/replay.py`):** aynı betikler aynı argümanlarla notebook'ta yeniden çalıştırılıyor.
+  - Yerelde boş bir kökte yeniden oynatma bütün üyeleri yeniden üretti: en büyük fark 2e-4, argmax hiçbir satırda
+    değişmedi. Sabit ağırlıklı blend OOF'u cpu2 0.4041, v4 0.4626.
+  - Fold-0 uçtan uca kontrolü: `tests/e2e_replay.py`.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |

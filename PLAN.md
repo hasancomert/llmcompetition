@@ -281,6 +281,11 @@ GPU bütçesi:
 - **16 Ekim public LB ablasyonları planı değiştirdi** (EXPERIMENTS.md "Public LB bulguları"):
   - Eşleştirme gizli testte etkisiz, prompt merkezleme zararlı. Gizli testte prompt başına az metin var.
   - v3 (merkezlenmiş) gönderilmeyecek. G ve B bırakıldı.
+- 16 Ekim metin başına workflow'u (EXPERIMENTS.md "Metin başına iyileştirmeler"):
+  - GPU blend 0.4430 → 0.4619 (fonksiyon kelimesi n-gram üyesi + aile uzmanları).
+  - CPU blend 0.3923 → 0.4038.
+  - Gönderim, deney betiklerini notebook'ta aynen yeniden oynatarak yapılıyor (`src/replay.py`, tarifler cpu2 / v4).
+- Dış derlem (olegzholobov/name-that-llm-response-corpus) CV'de zarar verdi; kullanılmıyor.
 - Yeni yön: metin başına sınıflandırıcıyı iyileştirmek. Sıra:
   1. Ham GPU harmanı, düz argmax (`--members v2raw --match-lambda 0`); kota açılınca gönderilecek.
   2. 12 katmanlı gömmeler (ham).
