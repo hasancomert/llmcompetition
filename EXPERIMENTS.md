@@ -115,3 +115,4 @@ Diğer gözlemler:
 | 59 | match_blend_v3_emb_logloss_drop02-06 | prompt clustering (thr 0.92) + soft Hungarian on blend_v3_emb_logloss, scenario drop 0.2-0.6; lambda nested | 0.5194 | 0.5194 ± 0.0036 | nan | | 4s | argmax BA 0.4469 on the same rows; ± = std over 5 drop simulations; log loss n/a (labels); src 6a24e4a02b9e |
 | 60 | emb_qwen3_4b_base_C0.001 | frozen LM embeddings (qwen3_4b_base, 10240 cols), LogReg C=0.001 | 0.4063 | 0.4063 ± 0.0349 | 1.7498 | | 118s | src 2bacb7ef9c88 |
 | 61 | emb_qwen3_8b_base_C0.001 | frozen LM embeddings (qwen3_8b_base, 16384 cols), LogReg C=0.001 | 0.4045 | 0.4045 ± 0.0314 | 1.7353 | | 325s | src bdb8fc10231c |
+| 62 | emb_qwen3_0.6b_base_C0.003 | frozen LM embeddings (qwen3_0.6b_base, 4096 cols), LogReg C=0.003 | 0.3752 | 0.3752 ± 0.0165 | 1.8348 | | 144s | src bdb8fc10231c |
