@@ -36,6 +36,8 @@ CENTER_THRESHOLD = 0.92
 MATCH_MIN_ROWS, MATCH_LAMBDA, MATCH_THRESHOLD = 40, 2.0, 0.92
 V1_WEIGHTS = {"charword": 2 / 3, "style": 1 / 3}
 CTR_CPU_WEIGHTS = {"tfc": 0.5, "stylec": 0.5}   # nested logloss hill-climb of tfc + style+tok_ctr: CV 0.4675
+V2RAW_WEIGHTS = {"svc": 0.257, "lp": 0.257, "emb4": 0.229, "emb8": 0.257}   # blend_v3_emb_logloss (GPU v1)
+C_EMB_RAW = 0.003
 
 
 def log(msg, t0):
@@ -79,8 +81,9 @@ def main():
     ap.add_argument("--out", default="submission.parquet")
     ap.add_argument("--work", default="/kaggle/temp/nllm")
     ap.add_argument("--cpu-only", action="store_true", help="skip the GPU members (fallback path test)")
-    ap.add_argument("--members", default="v3", choices=["v3", "ctr-cpu"],
-                    help="v3: tfc+lpc+emb4c+emb8c (GPU); ctr-cpu: tfc + centered style+tok only (no LM, CPU)")
+    ap.add_argument("--members", default="v3", choices=["v3", "ctr-cpu", "v2raw"],
+                    help="v3: tfc+lpc+emb4c+emb8c (GPU, centered); ctr-cpu: tfc + centered style+tok (CPU); "
+                         "v2raw: svc+lp+emb4+emb8 UNCENTERED (GPU v1 members; the LB showed centering hurts)")
     ap.add_argument("--match-lambda", type=float, default=MATCH_LAMBDA, help="0 = plain argmax (no matching)")
     ap.add_argument("--precomputed-lm", default="", help="LOCAL TEST: load emb/lp npy from this dir instead of the GPU")
     args = ap.parse_args()
@@ -118,7 +121,10 @@ def main():
     if not args.cpu_only:
         try:
             g_tr = cluster_prompts(texts.tolist(), CENTER_THRESHOLD)       # unsupervised prompt clusters
-            if n_te >= MATCH_MIN_ROWS:
+            if args.members == "v2raw":                                  # no centering at all
+                g_te = np.arange(n_te)
+                ctr_te = ctr_tr = lambda X: X
+            elif n_te >= MATCH_MIN_ROWS:
                 g_te = cluster_prompts(te["text"].tolist(), CENTER_THRESHOLD)
                 ctr_te = lambda X: center_groups(X, g_te)
             else:                                                       # too few test rows to cluster
@@ -139,7 +145,16 @@ def main():
                      for n, _ in LM_MODELS}
             else:
                 F = extract_lm_features(tr, te, Path(args.work), t0)
-            if F is not None:
+            if F is not None and args.members == "v2raw":
+                lp_tr = np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr]).astype(np.float32)
+                lp_te = np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te]).astype(np.float32)
+                members_oof["lp"], members_te["lp"] = fold_fit("lp", C_LP, lp_tr, lp_te, y, folds)
+                log(f"member lp: OOF BA {metrics.balanced_accuracy(y, members_oof['lp']):.4f} (local CV 0.3279)", t0)
+                for key, name, ref in (("emb4", "qwen3_4b_base", "0.3956"), ("emb8", "qwen3_8b_base", "0.4008")):
+                    members_oof[key], members_te[key] = fold_fit("emb", C_EMB_RAW, F[name][0], F[name][1], y, folds)
+                    log(f"member {key}: OOF BA {metrics.balanced_accuracy(y, members_oof[key]):.4f} "
+                        f"(local CV {ref})", t0)
+            elif F is not None:
                 lp_tr = ctr_tr(np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr]).astype(np.float32))
                 lp_te = ctr_te(np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te]).astype(np.float32))
                 members_oof["lpc"], members_te["lpc"] = fold_fit("lp", C_LP, lp_tr, lp_te, y, folds)
@@ -151,9 +166,17 @@ def main():
                     log(f"member {key}: OOF BA {metrics.balanced_accuracy(y, members_oof[key]):.4f} "
                         f"(local CV {ref})", t0)
             del F
-            fp = train_tfidf_ctr.make_fit_predict(TFC, tr["prompt_id"].to_numpy())
-            members_oof["tfc"], members_te["tfc"] = cv_preds.cv_predict(fp, texts, y, te["text"], folds, K)[:2]
-            log(f"member tfc: OOF BA {metrics.balanced_accuracy(y, members_oof['tfc']):.4f} (local CV 0.3956)", t0)
+            if args.members == "v2raw":
+                svc_args = argparse.Namespace(feats="char", model="svc", C=0.3, transductive=False)
+                fp = train_tfidf.make_fit_predict(svc_args, tr["prompt_id"].to_numpy())
+                members_oof["svc"], members_te["svc"] = cv_preds.cv_predict(fp, texts, y, te["text"], folds, K)[:2]
+                log(f"member svc: OOF BA {metrics.balanced_accuracy(y, members_oof['svc']):.4f} (local CV 0.3249)",
+                    t0)
+            else:
+                fp = train_tfidf_ctr.make_fit_predict(TFC, tr["prompt_id"].to_numpy())
+                members_oof["tfc"], members_te["tfc"] = cv_preds.cv_predict(fp, texts, y, te["text"], folds, K)[:2]
+                log(f"member tfc: OOF BA {metrics.balanced_accuracy(y, members_oof['tfc']):.4f} (local CV 0.3956)",
+                    t0)
             gpu_ok = True
         except Exception as e:  # never lose the submission to the GPU path
             import traceback
@@ -162,7 +185,7 @@ def main():
             members_oof, members_te = {}, {}
 
     if gpu_ok:
-        weights = WEIGHTS if args.members == "v3" else CTR_CPU_WEIGHTS
+        weights = {"v3": WEIGHTS, "ctr-cpu": CTR_CPU_WEIGHTS, "v2raw": V2RAW_WEIGHTS}[args.members]
     else:
         cw_args = argparse.Namespace(feats="char+word", model="lr", C=30.0, transductive=False)
         fp = train_tfidf.make_fit_predict(cw_args, tr["prompt_id"].to_numpy())
@@ -171,7 +194,7 @@ def main():
         weights = V1_WEIGHTS
     oof = blend(members_oof, weights)
     P = blend(members_te, weights)
-    ref = {"v3": "0.5931", "ctr-cpu": "0.4675"}[args.members] if gpu_ok else "0.3923"
+    ref = {"v3": "0.5931", "ctr-cpu": "0.4675", "v2raw": "0.4430"}[args.members] if gpu_ok else "0.3923"
     log(f"in-kernel OOF BA of the blend ({args.members if gpu_ok else 'v1 CPU fallback'}): "
         f"{metrics.balanced_accuracy(y, oof):.4f} (local nested CV {ref})", t0)
     try:  # diagnostic only

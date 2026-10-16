@@ -270,16 +270,23 @@ GPU bütçesi:
 | iş | durum | ölçülen sonuç |
 |---|---|---|
 | H-lite | bitti | `nllm-submit` v1 (CPU) ve `nllm-submit-gpu` v1 (GPU, 4 Qwen3) internetsiz koştu, çıktı denetimi geçti |
-| G | bitti | kümeleme v2 + yumuşak Hungarian; λ iç içe / benzetimle seçildi (v3'te λ = 2) |
-| A + B | bitti | dondurulmuş Qwen3 gömmeleri ham 0.40 → prompt merkezlemeyle 0.55–0.56 (test benzeri benzetimde +0.146) |
+| G | bitti, bırakıldı | kümeleme v2 + yumuşak Hungarian; CV'de büyük kazanç, gizli testte etkisiz (LB ablasyonu) |
+| A + B | A sürüyor, B bırakıldı | dondurulmuş Qwen3 gömmeleri ham 0.40. Merkezleme CV'de 0.55–0.56 verdi ama gizli testte zararlı |
 | B her aileye | bitti | merkezleme her özellik ailesinde işe yaradı: lp + stil 0.33 → 0.40, stil + tok 0.30 → 0.38, char TF-IDF 0.33 → 0.41 |
 | E (kısmen) | v3 harman | iç içe tepe tırmanma: BA 0.5931 / log loss 1.2539. Test benzeri tam boru hattı benzetimi (eşleştirmeli): hafif düşürme 0.616, sert düşürme 0.557 |
 | C | ertelendi | LoRA probu (Qwen3-1.7B, 2 kat, 2 epoch) BA 0.265; donmuş gömmenin çok altında, eksik öğrenmiş |
 | I | kısmen | 4 Qwen3'ün log-olasılık istatistikleri lp üyesinde. GLM-4-9B harmana +0.0015 (anlamsız), alınmadı. Gemma 4 T4'te çalışmadı |
 
-- GPU kotası: Kaggle haftalık 30 saatlik GPU kotası 16 Ekim'de doldu. v3 not defteri hazır ve uçtan uca sınandı
-  (fold 0 sahte test: 0.682, düşürmeli 0.677). Kota yenilenince push edilecek.
-- Sırada (CPU): istif (E), merkezleme eşiği, katman seçimi, artık model (D), sınıf kaydırma (F).
+- GPU kotası: Kaggle haftalık 30 saatlik GPU kotası 16 Ekim'de doldu.
+- **16 Ekim public LB ablasyonları planı değiştirdi** (EXPERIMENTS.md "Public LB bulguları"):
+  - Eşleştirme gizli testte etkisiz, prompt merkezleme zararlı. Gizli testte prompt başına az metin var.
+  - v3 (merkezlenmiş) gönderilmeyecek. G ve B bırakıldı.
+- Yeni yön: metin başına sınıflandırıcıyı iyileştirmek. Sıra:
+  1. Ham GPU harmanı, düz argmax (`--members v2raw --match-lambda 0`); kota açılınca gönderilecek.
+  2. 12 katmanlı gömmeler (ham).
+  3. Düzgün eğitilmiş LoRA (C).
+  4. Ham üyelerle argmax odaklı harman (E/F).
+
 
 ## 6. Çalışma kuralları (kullanıcıdan)
 

@@ -74,6 +74,30 @@ Diğer gözlemler:
 - **İşe yaramayanlar:** LoRA probu (0.265), GLM-4-9B'yi eklemek (+0.0015, anlamsız), merkezlenmiş LR TF-IDF
   üyeleri (log loss'u yüksek; harmanda ağırlık 0).
 
+## Public LB bulguları (16 Ekim): prompt yapısı gizli testte yok
+
+| gönderim | CV (argmax, iç içe) | test benzeri benzetim | public LB |
+|---|---|---|---|
+| `nllm-submit-gpu` v1: ham GPU harmanı + eşleştirme λ 4 | 0.443 | 0.52–0.56 | 0.416 |
+| `nllm-submit` v1: ham CPU harmanı + eşleştirme λ 2 | 0.392 | 0.43–0.45 | 0.356 |
+| `nllm-submit-nomatch` v1: aynı CPU harmanı, düz argmax | 0.392 | – | 0.362 |
+| `nllm-submit-ctrcpu` v1: merkezlenmiş tfc + stil, düz argmax | 0.4675 | – | 0.330 |
+
+- **Eşleştirme** gizli testte işe yaramıyor (CPU: 0.362 → 0.356).
+- **Prompt merkezleme gizli testte zarar veriyor** (CPU: ham 0.362 → merkezlenmiş 0.330), CV +0.075 demişti.
+- `src/structure_sim.py` bunu yeniden üretiyor. Prompt başına 1–3 metin kalınca:
+  - Eşleştirme etkisiz (GPU v1 0.440 → 0.452, CPU v1 0.386 → 0.385).
+  - Merkezlenmiş pipeline'lar ham olanların çok altına düşüyor; küçük kümelerde merkezlenmemiş satırlar,
+    merkezlenmiş veriyle eğitilmiş modele giriyor.
+  - Prompt başına 1 metinde eşleştirme de zarar veriyor (GPU v1 0.449 → 0.440).
+- Sonuç: gizli testte prompt başına az metin var (ya da prompt'lar kümelemeyle bulunamıyor). Prompt yapısına dayanan
+  her şey (eşleştirme, merkezleme, v3) bırakıldı. Bundan sonra **metin başına** sınıflandırıcı iyileştiriliyor; onların
+  CV'si test yapısından bağımsız.
+- Konu yönünü train prompt'larından öğrenip her metinden tek tek çıkarmak (NAP) da işe yaramadı: 8B ham 0.4045,
+  k=16 0.4037, k=64 0.3993, k=119 0.3911. Yeni prompt'ların konuları train prompt'larının kapsadığı alanın dışında.
+- Bütün gönderimlerde LB, argmax CV'nin ~0.03 altında. Olası sebepler: public %40'ın model karışımı farklı, ya da
+  test metinleri biraz daha zor.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
@@ -187,3 +211,7 @@ Diğer gözlemler:
 | 107 | emb_qwen3_8b_base_ctr_pca_lda | centered 8B emb -> StandardScaler -> PCA (256/512/1024, fit on training fold) -> LDA (lsqr, Ledoit-Wolf shrinkage) | 0.5183 | nan ± nan | 1.4366 | | 95s | NOT adopted: PCA 256 0.5183 / 1.4366, 512 0.5060 / 1.5310, 1024 0.4812 / 1.8674; LogReg on all columns 0.5583 / 1.3239; src bc3e7d87bce0 |
 | 108 | emb_qwen3_4b_base+qwen3_8b_base_ctr_C0.001 | frozen LM embeddings (qwen3_4b_base, qwen3_8b_base, 26624 cols) + prompt centering, LogReg C=0.001 | 0.5594 | 0.5594 ± 0.0287 | 1.2920 | | 262s | centered by 220 unsupervised clusters (thr 0.92); src bc3e7d87bce0 |
 | 109 | blend_ctr_v3_concat_check | v3 blend with the concatenated centered 4B+8B member (emb_qwen3_4b_base+qwen3_8b_base_ctr_C0.001: 0.5594 / 1.2920) + thr 0.97 8B member as extra candidates | 0.5886 | nan ± nan | 1.2238 | | 120s | NOT adopted: log loss better than v3 (1.2539) but BA lower (v3 0.5931); with only tfc + lpc + concat the hill-climb kept the concat alone (0.5594); src bc3e7d87bce0 |
+| 110 | SUB nllm-submit-gpu v1 | SUBMISSION (ref 57258098): blend_v3_emb_logloss (svc + lp + emb4 + emb8, uncentered) + test clustering + soft matching lambda 4 | 0.4430 | nan ± nan | 1.5775 | 0.416 | 1739s | CV = nested argmax blend; test-like sims predicted 0.519-0.559 with matching (full grid 0.642); LB is BELOW even the argmax CV -> matching gives no gain on the hidden test (or the test differs); see ablations; src 5260b197e715 |
+| 111 | SUB nllm-submit v1 (CPU) | SUBMISSION (ref 57258115): blend #38 (char+word TF-IDF LR + style+tok LR) + test clustering + soft matching lambda 2 | 0.3923 | nan ± nan | 1.8560 | 0.356 | 340s | CV = nested argmax blend; sims predicted 0.431-0.445 with matching (full grid 0.499); LB below argmax CV, same pattern as the GPU submission; src 5260b197e715 |
+| 112 | SUB nllm-submit-nomatch v1 | SUBMISSION ABLATION (ref 57260104): CPU v1 members, plain argmax (no clustering/matching) | 0.3923 | nan ± nan | 1.8560 | 0.362 | 325s | vs the same members WITH matching: LB 0.356 -> matching is neutral to slightly harmful on the hidden test (sims predicted +0.05); src d5cff52acbbc |
+| 113 | SUB nllm-submit-ctrcpu v1 | SUBMISSION ABLATION (ref 57260107): centered tfc (char TF-IDF SVC) + centered style+tok (0.5/0.5), test centered with test-only clusters, plain argmax | 0.4675 | nan ± nan | 1.5392 | 0.330 | 518s | CENTERING HURTS ON THE HIDDEN TEST: LB 0.330 vs raw CPU argmax 0.362 although CV said +0.075; the test has few texts per prompt (or prompts are not recoverable by clustering) -> v3 (centered) NOT pushed as main submission; src d5cff52acbbc |

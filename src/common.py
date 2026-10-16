@@ -119,13 +119,14 @@ def next_experiment_no() -> int:
     return max(nums, default=0) + 1
 
 
-def log_experiment(tag: str, change: str, s: dict, seconds: float | None = None, note: str = "") -> int:
+def log_experiment(tag: str, change: str, s: dict, seconds: float | None = None, note: str = "",
+                   lb: float | None = None) -> int:
     """Append one row to EXPERIMENTS.md: | no | tag | change | CV BA | fold BA mean ± std | CV log loss | public LB | time | note |"""
     no = next_experiment_no()
     t = f"{seconds:.0f}s" if seconds is not None else ""
     note = f"{note}; src {src_sha()}" if note else f"src {src_sha()}"
     row = (f"| {no} | {tag} | {change} | {s['ba']:.4f} | {s['ba_fold_mean']:.4f} ± {s['ba_fold_std']:.4f} | "
-           f"{s['logloss']:.4f} | | {t} | {note} |\n")
+           f"{s['logloss']:.4f} | {'' if lb is None else f'{lb:.3f}'} | {t} | {note} |\n")
     with open(EXPERIMENTS_MD, "a", encoding="utf-8") as f:
         f.write(row)
     return no
