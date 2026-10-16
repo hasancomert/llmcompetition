@@ -59,15 +59,21 @@ birleştirilmedi, `quarantine_luna_*` dışarıda. Kod: `src/ext_corpus.py` (yü
   - Bir Kaggle not defterinde açılırsa dataset input olarak eklenir: `kaggle/build_submission.py --ext-dataset`.
     Kopyalanmaz, yeniden yüklenmez.
 
-## Kaggle Benchmarks model proxy (16 Ekim; yalnız kontrol)
+## Kaggle Benchmarks model proxy (16 Ekim)
 
 - **Ne:** Kaggle'ın benchmark task'larında modelleri çağıran proxy.
   - Kullanıcının kotası: günlük 10 $, aylık 100 $ (SDK'daki salt-okunur kota uç noktasından doğrulandı).
   - Katalogda 18 etiketten 12'si birebir var (liste: PLAN.md).
-- **Durum:** hiçbir metin üretilmedi.
-  - Üretim yalnız kullanıcı onayından sonra, Kaggle altyapısında private bir task olarak yapılacak; yerel proxy
-    token'ı ile toplu üretim yok.
-  - Plan PLAN.md'de.
+- **Durum:** yalnız uyum testi v2 için metin üretildi (kullanıcı onayı 16 Ekim akşamı; tavan 5 $, harcanan 4,933 $).
+  - Üretim Kaggle altyapısında, private task `hasancmert/nllm-gen-ft2` ile yapıldı (`kaggle/bench_gen_task.py`); yerel
+    proxy token'ı ile toplu üretim yok.
+  - Girdi: private Kaggle dataset `hasancmert/nllm-ft2-prompts` (geri kurulan train prompt'ları + şablon). Yarışma
+    verisinden türediği için private; task da private.
+  - 12 etiket: DEV 3 şablon × 10 prompt (gpt-5.5 ve gpt-6-astra hariç), EVAL T2 × 20 prompt.
+  - Her satırda: row_id, model, metin, düşünme ayarı, çıktı sınırı, giriş/çıkış token'ı, maliyet, tarih.
+- **Dosyalar** (`data/external/ft2/`, git'e girmez, hiçbir yere public konmaz): `rows_<split>.csv`, `kaggle_ds/`,
+  `kaggle_out/` (task çıktıları), `eval_<split>.json`, `pred_<split>.csv`, `ext_blend*.json`.
+- **Kullanım:** yalnız uyum testi ve CV kontrolü (`--ext ft2`, varsayılan kapalı). Hiçbir gönderimde yok.
 - **Not:** çıktılar sağlayıcı şartlarına tabi; Kaggle Benchmarks'ın kullanım şartları ayrıca okunmalı.
 
 
@@ -94,9 +100,12 @@ Tokenizer dosyaları veri değil, ön-eğitimli varlık sayılır; kaynakları v
   - `featherless/costs.jsonl`.
   - `featherless/models.json`.
 - **Her satırda:** model_id, etiket, örnekleme ayarları, tarih, prompt kaynağı, hedef kelime, bitiş nedeni, token ve maliyet.
-- **Durum:** yalnız uyum testi (EXPERIMENTS.md). Hiçbir üyede, blend'de ya da gönderimde kullanılmadı. Dış veri kuralı
+- **Durum:** yalnız uyum testleri (v1 ve v2; EXPERIMENTS.md). Hiçbir gönderimde kullanılmadı. Dış veri kuralı
   netleşene kadar bu veriyle eğitilmiş model final submission'a konmayacak; pipeline'a eklenirse bayrakla (varsayılan
   kapalı) açılacak.
+  - Uyum testi v2 (tavan 1 $, harcanan 1,0105 $): `ft2/featherless_<split>.jsonl`. DEV'de T0 satırları v1
+    çıktılarından yeniden kullanıldı; EVAL'de T2 × 20 prompt (kimi-k3 tavan yüzünden 5/20).
+  - v2 metinleri CV kontrolünde eğitim satırı olarak denendi (`--ext ft2`, varsayılan kapalı).
 - **Kurallar açısından not:** prompt kurgulama ve üretim için yarışma train metinlerinden türeyen içerik Featherless'a
   gönderildi (150 prompt × 4 cevap ve kurulan prompt'lar). Yarışma kurallarındaki veri paylaşımı maddesi açısından
   değerlendirilmeli.
