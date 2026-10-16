@@ -62,7 +62,8 @@ def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: lis
                            text=True).stdout.strip()
     git += "+dirty" if dirty else ""
     pipeline = pipeline or ("submission_pipeline_gpu.py" if gpu else "submission_pipeline.py")
-    extra = (["--work", "/tmp/nllm_work"] if gpu else []) + list(extra_args or [])
+    # GPU: train LM features come from the private dataset nllm-lmfeats when it matches (saves ~25 GPU-min per run)
+    extra = (["--work", "/tmp/nllm_work", "--train-lm", "auto"] if gpu else []) + list(extra_args or [])
     src = (CELL.replace("__FILES__", repr(payload)).replace("__CODE_SHA__", repr(sha)).replace("__GIT__", repr(git))
            .replace("__PIPELINE__", repr(pipeline)).replace("__EXTRA_ARGS__", repr(extra)))
     nb = {"cells": [{"cell_type": "code", "id": "nllm-submit-main", "execution_count": None, "metadata": {}, "outputs": [],
@@ -77,7 +78,7 @@ def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: lis
     meta = {"id": f"{USER}/{slug}", "title": slug, "code_file": "submission.ipynb", "language": "python",
             "kernel_type": "notebook", "is_private": True, "enable_gpu": gpu, "enable_internet": False,
             "competition_sources": ["name-that-llm"],
-            "dataset_sources": [f"{USER}/nllm-tokenizers", f"{USER}/nllm-folds"],
+            "dataset_sources": [f"{USER}/nllm-tokenizers", f"{USER}/nllm-folds"] + ([f"{USER}/nllm-lmfeats"] if gpu else []),
             "model_sources": GPU_MODELS if gpu else [], "kernel_sources": []}
     if gpu:
         meta["machine_shape"] = "NvidiaTeslaT4"

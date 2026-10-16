@@ -51,8 +51,34 @@ def blend(members, weights):
     return e / e.sum(1, keepdims=True)
 
 
-def extract_lm_features(tr, te, work: Path, t0):
-    """Run gpu_embed.py for every LM on clean train/test csv copies; returns {name: (emb_tr, emb_te, lp_tr, lp_te)}."""
+def find_train_lm(spec):
+    """Directory of precomputed TRAIN LM features (private dataset nllm-lmfeats), or None."""
+    if not spec:
+        return None
+    if spec != "auto":
+        return Path(spec)
+    hits = sorted(p for p in glob.glob("/kaggle/input/**/meta_qwen3_0.6b_base_train.json", recursive=True)
+                  if "nllm-lmfeats" in p)
+    return Path(os.path.dirname(hits[0])) if hits else None
+
+
+def load_split(d: Path, name: str, split: str, ids):
+    """(emb, lp) of one model/split from d if present and in the given row order, else None."""
+    meta_p = d / f"meta_{name}_{split}.json"
+    if not meta_p.exists():
+        return None
+    import json
+    meta = json.loads(meta_p.read_text())
+    if [str(i) for i in meta["ids"]] != [str(i) for i in ids]:
+        return None
+    return (np.load(d / f"emb_{name}_{split}.npy").astype(np.float32),
+            np.load(d / f"lp_{name}_{split}.npy").astype(np.float32))
+
+
+def extract_lm_features(tr, te, work: Path, t0, train_dir: Path | None = None):
+    """Run gpu_embed.py for every LM on clean csv copies; returns {name: (emb_tr, emb_te, lp_tr, lp_te)}.
+    TRAIN features are taken from train_dir (precomputed by the same gpu_embed.py on the same Kaggle GPU type) when
+    they exist there in train.csv row order; otherwise they are extracted here too."""
     work.mkdir(parents=True, exist_ok=True)
     tr[["id", "text"]].to_csv(work / "train.csv", index=False)
     te[["id", "text"]].to_csv(work / "test.csv", index=False)
@@ -62,14 +88,17 @@ def extract_lm_features(tr, te, work: Path, t0):
         cfg = [p for p in glob.glob("/kaggle/input/**/config.json", recursive=True) if f"/{hint}/" in p and "qwen" in p]
         if not cfg:
             raise FileNotFoundError(f"model {hint} not attached")
+        pre = load_split(train_dir, name, "train", tr["id"].tolist()) if train_dir else None
+        texts = ([] if pre is not None else ["--texts", str(work / "train.csv")]) + ["--texts", str(work / "test.csv")]
         r = subprocess.run([sys.executable, str(here / "gpu_embed.py"), "--model-dir", os.path.dirname(cfg[0]),
-                            "--name", name, "--texts", str(work / "train.csv"), "--texts", str(work / "test.csv"),
-                            "--out", str(work / "emb")])
+                            "--name", name, *texts, "--out", str(work / "emb")])
         if r.returncode != 0:
             raise RuntimeError(f"gpu_embed failed for {name} (exit {r.returncode})")
         f = lambda kind, split: np.load(work / "emb" / f"{kind}_{name}_{split}.npy").astype(np.float32)
-        out[name] = (f("emb", "train"), f("emb", "test"), f("lp", "train"), f("lp", "test"))
-        log(f"LM features {name}: emb {out[name][0].shape}, lp {out[name][2].shape}", t0)
+        emb_tr, lp_tr = pre if pre is not None else (f("emb", "train"), f("lp", "train"))
+        out[name] = (emb_tr, f("emb", "test"), lp_tr, f("lp", "test"))
+        log(f"LM features {name}: emb {out[name][0].shape}, lp {out[name][2].shape} "
+            f"(train {'from ' + str(train_dir) if pre is not None else 'extracted here'})", t0)
     return out
 
 
@@ -86,6 +115,7 @@ def main():
                          "v2raw: svc+lp+emb4+emb8 UNCENTERED (GPU v1 members; the LB showed centering hurts)")
     ap.add_argument("--match-lambda", type=float, default=MATCH_LAMBDA, help="0 = plain argmax (no matching)")
     ap.add_argument("--precomputed-lm", default="", help="LOCAL TEST: load emb/lp npy from this dir instead of the GPU")
+    ap.add_argument("--train-lm", default="", help="dir of precomputed TRAIN LM features, or 'auto' (nllm-lmfeats)")
     args = ap.parse_args()
     t0 = time.time()
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -144,7 +174,7 @@ def main():
                 F = {n: (g("emb", n, "train"), g("emb", n, "test"), g("lp", n, "train"), g("lp", n, "test"))
                      for n, _ in LM_MODELS}
             else:
-                F = extract_lm_features(tr, te, Path(args.work), t0)
+                F = extract_lm_features(tr, te, Path(args.work), t0, find_train_lm(args.train_lm))
             if F is not None and args.members == "v2raw":
                 lp_tr = np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr]).astype(np.float32)
                 lp_te = np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te]).astype(np.float32)
