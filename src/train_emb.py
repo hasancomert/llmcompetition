@@ -26,6 +26,29 @@ from common import K, OUT, encode_y, load_folds, load_test, load_train, run_memb
 EMB = OUT / "emb"
 
 
+def make_model(kind, C):
+    """emb: StandardScaler + LogReg; lp (optionally with style+tok columns): QuantileTransformer + scaler + LogReg."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import QuantileTransformer, StandardScaler
+    if kind == "emb":
+        return make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=3000))
+    return make_pipeline(QuantileTransformer(n_quantiles=200, output_distribution="normal", random_state=0),
+                         StandardScaler(), LogisticRegression(C=C, max_iter=5000))
+
+
+def fold_fit(kind, C, Xtr, Xte, y, folds):
+    """Fit one model per shared fold; OOF rows from the held-out fold model, test = mean of the fold models."""
+    oof, test = np.zeros((len(y), K)), np.zeros((len(Xte), K))
+    n_f = int(folds.max()) + 1
+    for k in range(n_f):
+        trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
+        m = make_model(kind, C).fit(Xtr[trn], y[trn])
+        oof[np.ix_(val, m.classes_)] = m.predict_proba(Xtr[val])
+        test[:, m.classes_] += m.predict_proba(Xte) / n_f
+    return oof, test
+
+
 def load_feats(kind, names, split):
     mats = []
     for nm in names:
@@ -91,9 +114,6 @@ def main():
     ap.add_argument("--tag", default=None)
     ap.add_argument("--center-sim", type=int, default=0, help="only run the test-like centering check (N sims)")
     args = ap.parse_args()
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import QuantileTransformer, StandardScaler
 
     t0 = time.time()
     tr, te = load_train(), load_test()
@@ -119,18 +139,7 @@ def main():
         Str, Ste, _ = build("style+tok", tr, te)
         Xtr, Xte = np.hstack([Xtr, Str]), np.hstack([Xte, Ste])
 
-    def model():
-        if args.kind == "emb":
-            return make_pipeline(StandardScaler(), LogisticRegression(C=args.C, max_iter=3000))
-        return make_pipeline(QuantileTransformer(n_quantiles=200, output_distribution="normal", random_state=0),
-                             StandardScaler(), LogisticRegression(C=args.C, max_iter=5000))
-
-    oof, test = np.zeros((len(y), K)), np.zeros((len(Xte), K))
-    for k in range(int(folds.max()) + 1):
-        trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
-        m = model().fit(Xtr[trn], y[trn])
-        oof[val] = m.predict_proba(Xtr[val])
-        test += m.predict_proba(Xte) / (folds.max() + 1)
+    oof, test = fold_fit(args.kind, args.C, Xtr, Xte, y, folds)
     tag = args.tag or (f"{args.kind}_{'+'.join(names)}{'_ctr' if args.center else ''}"
                        f"{'_style' if args.with_style else ''}_C{args.C:g}")
     change = (f"{'frozen LM embeddings' if args.kind == 'emb' else 'LM token log-prob stats'} ({', '.join(names)}, "

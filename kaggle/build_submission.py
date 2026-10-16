@@ -36,9 +36,9 @@ comp_dir = os.path.dirname(find("test.csv", "name-that-llm"))
 tok_dir = os.path.dirname(find("gemma__tokenizer.json", "nllm-tokenizers"))
 folds_csv = find("folds.csv", "nllm-folds")
 print("inputs:", comp_dir, tok_dir, folds_csv)
-sys.argv = ["submission_pipeline.py", "--data-dir", comp_dir, "--folds", folds_csv, "--tokenizers-flat", tok_dir,
-            "--out", "/kaggle/working/submission.parquet"]
-runpy.run_path(f"{proj}/src/submission_pipeline.py", run_name="__main__")
+sys.argv = [__PIPELINE__, "--data-dir", comp_dir, "--folds", folds_csv, "--tokenizers-flat", tok_dir,
+            "--out", "/kaggle/working/submission.parquet"] + __EXTRA_ARGS__
+runpy.run_path(f"{proj}/src/{__PIPELINE__}", run_name="__main__")
 '''
 
 
@@ -49,7 +49,10 @@ def code_files() -> dict[str, Path]:
     return files
 
 
-def build() -> Path:
+GPU_MODELS = [f"qwen-lm/qwen-3/transformers/{h}/1" for h in ("0.6b-base", "1.7b-base", "4b-base", "8b-base")]
+
+
+def build(gpu: bool = False) -> Path:
     files = code_files()
     payload = {rel: base64.b64encode(p.read_bytes()).decode() for rel, p in files.items()}
     sha = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
@@ -58,20 +61,26 @@ def build() -> Path:
     dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "src", "reuse"], capture_output=True,
                            text=True).stdout.strip()
     git += "+dirty" if dirty else ""
-    src = CELL.replace("__FILES__", repr(payload)).replace("__CODE_SHA__", repr(sha)).replace("__GIT__", repr(git))
+    pipeline = "submission_pipeline_gpu.py" if gpu else "submission_pipeline.py"
+    extra = ["--work", "/tmp/nllm_work"] if gpu else []
+    src = (CELL.replace("__FILES__", repr(payload)).replace("__CODE_SHA__", repr(sha)).replace("__GIT__", repr(git))
+           .replace("__PIPELINE__", repr(pipeline)).replace("__EXTRA_ARGS__", repr(extra)))
     nb = {"cells": [{"cell_type": "code", "id": "nllm-submit-main", "execution_count": None, "metadata": {}, "outputs": [],
                      "source": src.strip().splitlines(keepends=True)}],
           "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                        "language_info": {"name": "python"}},
           "nbformat": 4, "nbformat_minor": 5}
-    d = ROOT / "outputs" / "kaggle_build" / SLUG
+    slug = SLUG + ("-gpu" if gpu else "")
+    d = ROOT / "outputs" / "kaggle_build" / slug
     d.mkdir(parents=True, exist_ok=True)
     (d / "submission.ipynb").write_text(json.dumps(nb), encoding="utf-8")
-    meta = {"id": f"{USER}/{SLUG}", "title": SLUG, "code_file": "submission.ipynb", "language": "python",
-            "kernel_type": "notebook", "is_private": True, "enable_gpu": False, "enable_internet": False,
+    meta = {"id": f"{USER}/{slug}", "title": slug, "code_file": "submission.ipynb", "language": "python",
+            "kernel_type": "notebook", "is_private": True, "enable_gpu": gpu, "enable_internet": False,
             "competition_sources": ["name-that-llm"],
             "dataset_sources": [f"{USER}/nllm-tokenizers", f"{USER}/nllm-folds"],
-            "model_sources": [], "kernel_sources": []}
+            "model_sources": GPU_MODELS if gpu else [], "kernel_sources": []}
+    if gpu:
+        meta["machine_shape"] = "NvidiaTeslaT4"
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     print(f"built {d} with {len(files)} code files, bundle {sha}, git {git}")
     return d
@@ -80,7 +89,8 @@ def build() -> Path:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--push", action="store_true")
+    ap.add_argument("--gpu", action="store_true", help="v2 GPU notebook (submission_pipeline_gpu.py)")
     a = ap.parse_args()
-    d = build()
+    d = build(a.gpu)
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)
