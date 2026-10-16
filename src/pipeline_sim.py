@@ -8,7 +8,11 @@ members' OOF rows do not depend on the composition and are taken from outputs/pr
 pooled kept rows, as on the test. Nothing uses labels except fitting on training folds and scoring.
 
 Usage: python pipeline_sim.py --raw svc=tfidf_char_svc_C0.3 --raw lp=<tag> --ctr emb4c=qwen3_4b_base:0.001 \
-           --ctr emb8c=qwen3_8b_base:0.001 --weights svc=1,lp=1,emb4c=1,emb8c=1 --sims 3
+           --ctr emb8c=qwen3_8b_base:0.001 --ctr lpc=lps:qwen3_0.6b_base+qwen3_8b_base:0.1 \
+           --weights svc=1,lp=1,emb4c=1,emb8c=1,lpc=1 --sims 3
+--ctr spec: name=[kind:]feat1+feat2:C with kind emb (default; StandardScaler + LogReg), lp (log-prob stats),
+lps (log-prob stats + style+tok v2, all centered) or style (style+tok v2 only; feats empty). lp/lps/style use the
+QuantileTransformer + scaler + LogReg pipeline, as train_emb.py.
 """
 from __future__ import annotations
 
@@ -17,9 +21,28 @@ import time
 
 import numpy as np
 
-from common import K, encode_y, load_folds, load_member, load_train, log_experiment, metrics
+from common import K, encode_y, load_folds, load_member, load_test, load_train, log_experiment, metrics
 from matching import cluster_prompts, drop_mask, match
 from train_emb import center_by_clusters, load_feats, make_model
+
+
+def parse_ctr(spec):
+    """'name=[kind:]f1+f2:C' -> (name, kind, [features], C)."""
+    name, rest = spec.split("=", 1)
+    parts = rest.split(":")
+    kind = parts[0] if len(parts) == 3 else "emb"
+    feats = [f for f in parts[-2].split("+") if f]
+    assert kind in ("emb", "lp", "lps", "style"), kind
+    return name, kind, feats, float(parts[-1])
+
+
+def ctr_matrix(kind, feats, tr):
+    """Raw (uncentered) training matrix of a centered member, in train.csv row order."""
+    mats = [load_feats("emb" if kind == "emb" else "lp", [f], "train")[0][0] for f in feats]
+    if kind in ("lps", "style"):
+        from train_gbdt import build
+        mats.append(build("style+tok", tr, load_test())[0])
+    return np.hstack(mats).astype(np.float32)
 
 
 def blend(members, weights):
@@ -48,15 +71,16 @@ def main():
     n_f = int(folds.max()) + 1
     weights = {kv.split("=")[0]: float(kv.split("=")[1]) for kv in a.weights.split(",")}
     raw = {kv.split("=")[0]: load_member(kv.split("=")[1])[0] for kv in a.raw}
-    ctr_specs = {kv.split("=")[0]: (kv.split("=")[1].split(":")[0], float(kv.split("=")[1].split(":")[1])) for kv in a.ctr}
-    feats = {nm: load_feats("emb", [feat], "train")[0][0] for nm, (feat, _) in ctr_specs.items()}
+    ctr_specs = {nm: (kind, fl, C) for nm, kind, fl, C in map(parse_ctr, a.ctr)}
+    feats = {nm: ctr_matrix(kind, fl, tr) for nm, (kind, fl, _) in ctr_specs.items()}
     models = {}
-    for nm, (feat, C) in ctr_specs.items():                # training side: independent of the simulation
+    for nm, (kind, fl, C) in ctr_specs.items():            # training side: independent of the simulation
         for k in range(n_f):
             trn = np.flatnonzero(folds != k)
             Xc, _ = center_by_clusters(feats[nm][trn], [texts[i] for i in trn], a.thr)
-            models[nm, k] = make_model("emb", C).fit(Xc, y[trn])
-        print(f"fitted centered member {nm} ({feat}, C={C}) on 5 training folds  ({time.time() - t0:.0f}s)", flush=True)
+            models[nm, k] = make_model("emb" if kind == "emb" else "lp", C).fit(Xc, y[trn])
+        print(f"fitted centered member {nm} ({kind}: {'+'.join(fl)}, {feats[nm].shape[1]} cols, C={C}) on "
+              f"{n_f} training folds  ({time.time() - t0:.0f}s)", flush=True)
     lo, hi = map(float, a.keep.split(","))
     lams = [float(x) for x in a.lams.split(",")]
     rng = np.random.default_rng(0)

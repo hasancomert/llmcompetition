@@ -112,12 +112,13 @@ def center_sim(Xtr_raw, y, folds, texts, thr, C, sims, seed=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--kind", choices=["emb", "lp"], required=True)
-    ap.add_argument("--names", required=True, help="comma-separated feature names (gpu_embed --name)")
+    ap.add_argument("--kind", choices=["emb", "lp", "style"], required=True, help="style: only the style+tok v2 columns")
+    ap.add_argument("--names", default="", help="comma-separated feature names (gpu_embed --name)")
     ap.add_argument("--C", type=float, default=0.05)
     ap.add_argument("--center", action="store_true")
     ap.add_argument("--thr", type=float, default=0.92)
     ap.add_argument("--with-style", action="store_true")
+    ap.add_argument("--center-style", action="store_true", help="also center the style+tok columns (default: raw)")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--center-sim", type=int, default=0, help="only run the test-like centering check (N sims)")
     args = ap.parse_args()
@@ -126,14 +127,20 @@ def main():
     tr, te = load_train(), load_test()
     y = encode_y(tr["model"])
     folds = load_folds(tr)
-    names = args.names.split(",")
+    names = args.names.split(",") if args.names else []
+    if args.kind == "style":
+        names, args.with_style, args.center_style = [], True, args.center
     tr_m, te_m = load_feats(args.kind, names, "train"), load_feats(args.kind, names, "test")
     for (X, meta) in tr_m:
         assert meta["ids"] == tr["id"].tolist(), "feature rows are not in train.csv order"
     for (X, meta) in te_m:
         assert meta["ids"] == te["id"].tolist()
-    Xtr = np.hstack([m[0] for m in tr_m])
-    Xte = np.hstack([m[0] for m in te_m])
+    Xtr = np.hstack([m[0] for m in tr_m]) if tr_m else np.zeros((len(tr), 0), np.float32)
+    Xte = np.hstack([m[0] for m in te_m]) if te_m else np.zeros((len(te), 0), np.float32)
+    if args.with_style and args.center_style:              # style+tok columns join before centering
+        from train_gbdt import build
+        Str, Ste, _ = build("style+tok", tr, te)
+        Xtr, Xte = np.hstack([Xtr, Str]).astype(np.float32), np.hstack([Xte, Ste]).astype(np.float32)
     if args.center_sim:
         return center_sim(Xtr, y, folds, tr["text"].tolist(), args.thr, args.C, args.center_sim)
     note = ""
@@ -141,19 +148,22 @@ def main():
         Xtr, g = center_by_clusters(Xtr, tr["text"].tolist(), args.thr)
         Xte, _ = center_by_clusters(Xte, te["text"].tolist(), args.thr) if len(te) >= 40 else (Xte - Xte.mean(0), None)
         note = f"centered by {len(np.unique(g))} unsupervised clusters (thr {args.thr})"
-    if args.with_style:
+    if args.with_style and not args.center_style:
         from train_gbdt import build
         Str, Ste, _ = build("style+tok", tr, te)
         Xtr, Xte = np.hstack([Xtr, Str]), np.hstack([Xte, Ste])
 
     oof, test = fold_fit(args.kind, args.C, Xtr, Xte, y, folds)
-    tag = args.tag or (f"{args.kind}_{'+'.join(names)}{'_ctr' if args.center else ''}"
-                       f"{'_style' if args.with_style else ''}_C{args.C:g}")
-    change = (f"{'frozen LM embeddings' if args.kind == 'emb' else 'LM token log-prob stats'} ({', '.join(names)}, "
-              f"{Xtr.shape[1]} cols){' + prompt centering' if args.center else ''}"
-              f"{' + style+tok v2' if args.with_style else ''}, LogReg C={args.C:g}")
+    sty = "_style" + ("c" if args.center_style else "") if args.with_style else ""
+    tag = args.tag or (f"{args.kind}_{'+'.join(names)}{'_ctr' if args.center else ''}{sty}_C{args.C:g}"
+                       if names else f"style+tok{'_ctr' if args.center else ''}_C{args.C:g}")
+    family = {"emb": "frozen LM embeddings", "lp": "LM token log-prob stats", "style": "style+tok v2 features"}[args.kind]
+    change = (f"{family} ({', '.join(names) + ', ' if names else ''}{Xtr.shape[1]} cols)"
+              f"{' + prompt centering' if args.center else ''}"
+              f"{' + style+tok v2' + (' (centered too)' if args.center_style else ' (not centered)') if names and args.with_style else ''}"
+              f", LogReg C={args.C:g}")
     run_member(tag, change, oof, test, y, folds, t0, note=note, names=names, C=args.C, center=args.center,
-               with_style=args.with_style)
+               with_style=args.with_style, center_style=args.center_style)
 
 
 if __name__ == "__main__":
