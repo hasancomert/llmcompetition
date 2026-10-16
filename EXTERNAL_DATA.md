@@ -19,3 +19,31 @@ Dış derlem notları (16 Ekim):
 
 
 Tokenizer dosyaları veri değil, ön-eğitimli varlık sayılır; kaynakları ve lisansları `MODELS_LICENSES.md`'de.
+
+## Featherless ile üretilen etiketli metinler (dal `featherless-extra-data`; 16 Ekim)
+
+- **Kaynak:** Featherless API (`https://api.featherless.ai/v1`, ücretli; iş kolu bütçesi 8 $). Kullanıcı bu iş kolunu açıkça
+  istedi; eski "ücretli API ile veri üretme" kuralının bu iş kolu için istisnası.
+- **Modeller (etiketin birebir aynısı):**
+
+| model | etiket | lisans |
+|---|---|---|
+| `zai-org/GLM-5.3` | glm-5.3 | "GLM-5.3 License", MIT benzeri |
+| `zai-org/GLM-5.3-Flash` | glm-5.3-flash | MIT |
+| `moonshotai/Kimi-K3` | kimi-k3 | "Kimi K3 License", MIT benzeri |
+| `Qwen/Qwen3-32B` | yalnız prompt kurgulama | Apache-2.0 |
+
+  - GLM-5.3 lisansının şartı: geliri 10 milyar $'ı aşan "Model as a Service" işletmeleri için güvenlik incelemesi.
+  - Kimi-K3 lisansının şartları: 20 milyon $ MaaS geliri ya da 100 milyon MAU üstü üründe isim gösterme.
+- **Dosyalar** (`data/external/`, git'e girmez, hiçbir yere public konmaz):
+  - `reconstructed_prompts.csv`: yarışma verisinden türedi.
+  - `featherless/gen_<koşu>.jsonl`.
+  - `featherless/costs.jsonl`.
+  - `featherless/models.json`.
+- **Her satırda:** model_id, etiket, örnekleme ayarları, tarih, prompt kaynağı, hedef kelime, bitiş nedeni, token ve maliyet.
+- **Durum:** yalnız uyum testi (EXPERIMENTS.md). Hiçbir üyede, blend'de ya da gönderimde kullanılmadı. Dış veri kuralı
+  netleşene kadar bu veriyle eğitilmiş model final submission'a konmayacak; pipeline'a eklenirse bayrakla (varsayılan
+  kapalı) açılacak.
+- **Kurallar açısından not:** prompt kurgulama ve üretim için yarışma train metinlerinden türeyen içerik Featherless'a
+  gönderildi (150 prompt × 4 cevap ve kurulan prompt'lar). Yarışma kurallarındaki veri paylaşımı maddesi açısından
+  değerlendirilmeli.

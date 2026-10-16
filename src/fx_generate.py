@@ -69,6 +69,8 @@ def main():
     ap.add_argument("--reasoning-allowance", type=int, default=0, help="extra max_tokens for reasoning")
     ap.add_argument("--step-cap", type=float, default=1.2)
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--retry-empty", type=int, default=1, help="retries when the content comes back empty")
+    ap.add_argument("--step", default="step3", help="cost-log purpose prefix (step3 = fit test, step4 = scaling)")
     a = ap.parse_args()
     tr = pd.read_csv(F.ROOT / "data" / "train.csv")
     P = pd.read_csv(PROMPTS).set_index("prompt_id")
@@ -83,9 +85,15 @@ def main():
         n = int(tgt.get(pid, 110))
         msgs = [{"role": "user", "content": P.loc[pid, "reconstructed_prompt"] + INSTRUCTION.format(n=n)}]
         max_tokens = int(n * 2.2) + 200 + a.reasoning_allowance
-        r = F.chat(a.model_id, msgs, purpose=f"step3:gen_{a.run}", max_tokens=max_tokens, temperature=a.temperature,
-                   top_p=a.top_p, extra=extra, step_cap=a.step_cap, step_prefix="step3:")
-        text, info = clean(r["content"])
+        for attempt in range(1 + a.retry_empty):           # empty content (reasoning hit the cap / backend glitch)
+            r = F.chat(a.model_id, msgs, purpose=f"{a.step}:gen_{a.run}", max_tokens=max_tokens,
+                       temperature=a.temperature, top_p=a.top_p, extra=extra, step_cap=a.step_cap,
+                       step_prefix=f"{a.step}:")
+            text, info = clean(r["content"])
+            if len(text.split()) >= 5:
+                break
+            max_tokens = int(max_tokens * 1.5) + 1000
+        info["attempts"] = attempt + 1
         return {"id": f"fx_{a.run}_{pid}", "prompt_id": pid, "label": a.label, "model_id": a.model_id,
                 "settings": {"temperature": a.temperature, "top_p": a.top_p, "max_tokens": max_tokens, **extra},
                 "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -103,10 +111,10 @@ def main():
                 f.flush()
                 n_ok += 1
                 if n_ok % 25 == 0:
-                    print(f"{a.run}: {n_ok}/{len(pids)}  step-3 spend {F.spent('step3:'):.4f} USD", flush=True)
+                    print(f"{a.run}: {n_ok}/{len(pids)}  {a.step} spend {F.spent(a.step + ':'):.4f} USD", flush=True)
         except F.BudgetStop as e:
             print(f"BUDGET STOP: {e}", flush=True)
-    print(f"{a.run}: wrote {n_ok} rows to {out}; step-3 spend {F.spent('step3:'):.4f} USD, total {F.spent():.4f} USD")
+    print(f"{a.run}: wrote {n_ok} rows to {out}; {a.step} spend {F.spent(a.step + ':'):.4f} USD, total {F.spent():.4f} USD")
 
 
 if __name__ == "__main__":

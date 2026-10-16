@@ -293,6 +293,25 @@ GPU bütçesi:
   4. Ham üyelerle argmax odaklı harman (E/F).
 
 
+### Featherless ek veri iş kolu (16 Ekim'de açıldı; dal `featherless-extra-data`)
+
+**Kurallar (kullanıcıdan):**
+- Bütçe 8 $; her çağrı `data/external/featherless/costs.jsonl`'a yazılır. 8 $'a yaklaşınca durulur ve sorulur.
+- En fazla 2 eşzamanlı istek. API anahtarı hiçbir yerde görünmez.
+- Üretilen veri `data/external/`'da kalır, git'e girmez ve satır başına kaynak bilgisi taşır.
+- Dış veri kuralı netleşene kadar bu veriyle eğitilmiş model final submission'a konmaz; pipeline'da bayrakla açılır,
+  varsayılan kapalıdır.
+
+**Adımlar ve durum:**
+
+| adım | durum | not |
+|---|---|---|
+| 1. Hangi etiketler üretilebilir | bitti | glm-5.3, glm-5.3-flash, kimi-k3 birebir var. qwen3.8-max yok: `Qwen3.8-2.4T-A95B` Max'in "temeli" olarak geçiyor, kullanıcı kararı |
+| 2. Format ve prompt'lar | bitti | train metinleri tam ve tek paragraf, kırpma yok. 150 prompt Qwen3-32B ile geri kuruldu |
+| 3. Uyum testi | bitti, rapor edildi | GLM'lerde tam etiket uyumu gerçeğe yakın ama lab düzeyinde zayıf. Kimi zayıf. Sebep üslup farkı. Toplam harcama 1.217 $ |
+| 4. Ölçekleme | onay bekliyor | uyum zayıf; önce üslup talimatlı ikinci uyum testi önerildi |
+| 5. CV testi | bekliyor | ek veri yalnız eğitim katlarında, ağırlıkla dengelenecek, bayrakla açılacak |
+
 ## 6. Çalışma kuralları (kullanıcıdan)
 
 - Kararlar CV'ye göre; her deney `EXPERIMENTS.md`'de (no, değişiklik, CV BA, CV log loss, varsa public LB). İşe yaramayanlar da yazılır.

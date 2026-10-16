@@ -62,3 +62,12 @@ Notlar:
 
 Kaggle imajındaki GPU kütüphaneleri: torch 2.11 (BSD-3), transformers 5.16.1 (Apache-2.0), peft 0.20.0 (Apache-2.0),
 accelerate (Apache-2.0).
+
+## API üzerinden kullanılan modeller (Featherless ek veri iş kolu; ağırlık indirilmedi)
+
+| model | ne için | lisans |
+|---|---|---|
+| `zai-org/GLM-5.3` | glm-5.3 etiketli metin üretimi (uyum testi) | GLM-5.3 License (MIT benzeri; 10 milyar $ üstü MaaS işletmelerine güvenlik incelemesi şartı) |
+| `zai-org/GLM-5.3-Flash` | glm-5.3-flash etiketli metin üretimi | MIT |
+| `moonshotai/Kimi-K3` | kimi-k3 etiketli metin üretimi | Kimi K3 License (MIT benzeri; 20 milyon $ MaaS geliri / 100 milyon MAU üstü için ek şart) |
+| `Qwen/Qwen3-32B` | train prompt'larının geri kurulması | Apache-2.0 |

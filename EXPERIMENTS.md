@@ -129,6 +129,70 @@ sklearn ile yeniden puanlandı, kodu sızıntı açısından okundu ve çoğu bi
 Sonuç: mevcut özelliklerle metin başına sınıflandırıcı ~0.46'da doymuş. Sıradaki kaldıraçlar GPU tarafında: düzgün
 eğitilmiş LoRA (ortalama havuzlama, kesilmiş katmanlar, daha yüksek öğrenme oranı, 4+ epoch) ve 12 katmanlı gömmeler.
 
+## Featherless ek veri: uyum testi (16 Ekim; dal `featherless-extra-data`)
+
+Etiketli ek metin, etiketin birebir aynısı olan modelle Featherless API üzerinden üretildi.
+
+**Bulunan modeller:**
+
+| etiket | model | fiyat ($/M giriş/çıkış) |
+|---|---|---|
+| glm-5.3 | `zai-org/GLM-5.3` | 1.4 / 4.4 |
+| glm-5.3-flash | `zai-org/GLM-5.3-Flash` | 0.15 / 0.5 |
+| kimi-k3 | `moonshotai/Kimi-K3` | 3 / 15 |
+
+- qwen3.8-max yok. `Qwen/Qwen3.8-2.4T-A95B`'nin model kartı "Qwen3.8-Max bu modeli temel alan, daha fazla özellikli
+  resmi sürümdür" diyor; aynı model sayılmadı.
+- Diğer 14 etiketin yalnız damıtılmış türevleri var.
+
+**Prompt'lar:** 150 prompt'un sorusu, her prompt için hedef olmayan modellerden seçilen 4 cevaptan `Qwen/Qwen3-32B`
+(düşünme kapalı) ile geri kuruldu: `data/external/reconstructed_prompts.csv`.
+
+**Üretim:**
+- Metne eklenen talimat: "Answer in a single paragraph of about N words." N, aynı prompt ve etiketin train metninin
+  kelime sayısı.
+- Örnekleme: temperature 1.0, top_p 0.95 (generation_config / model kartı); `reasoning_effort=low`.
+  - GLM'lerde efor low düşünmeyi neredeyse kapatıyor; `enable_thinking=false` çalışmadı.
+  - Kimi-K3'te düşünme kapatılamıyor.
+- Train metinleri tam ve tek paragraf: %99'u nokta ile bitiyor, satır sonu yok. Bu yüzden kırpma uygulanmadı.
+
+**Uyum, yani fold'a göre güvenli tahmin:** her üretilmiş metin, prompt'unu görmemiş fold modeliyle tahmin edildi.
+Model, CPU per-text üyelerinden üçünün blend'i: ng fw + ng fw-shapew + style2, gerçek OOF BA 0.3974. Fold mantığı
+kayıtlı üyeleri birebir yeniden üretiyor.
+
+| koşu | n | üretilen → doğru etiket | gerçek, aynı prompt'lar | üretilen → doğru lab | gerçek lab | ort. P(etiket) üretilen / gerçek | en çok giden |
+|---|---|---|---|---|---|---|---|
+| GLM-5.3-Flash, low | 139 (+11 yeniden üretildi) | 12.9% | 15.1% | 23.0% | 43.9% | 0.141 / 0.143 | claude-sonnet-5 42, fable 19, opus-4-6 19, glm-5.3-flash 18 |
+| GLM-5.3, low | 150 | 15.3% | 22.0% | 25.3% | 43.3% | 0.121 / 0.159 | claude-sonnet-5 39, glm-5.3 23, fable 19 |
+| Kimi-K3, low | 38 (22 boş) | 5.3% | 31.6% | 5.3% | 31.6% | 0.052 / 0.223 | claude-sonnet-5 10, glm-5.3-flash 8 |
+| GLM-5.3, varsayılan düşünme | 5 | 1/5 | 0/5 | 2/5 | 1/5 | – | (çok küçük örnek) |
+| GLM-5.3-Flash, varsayılan düşünme | 6 | 0/6 | 0/6 | 1/6 | 3/6 | – | (çok küçük örnek) |
+
+**Stil, aynı prompt'un gerçek metniyle eşli karşılaştırma (`fx_style.py`):**
+- Uzunluk tutuyor: üretilen/gerçek kelime oranının medyanı 0.99–1.03.
+- Sistematik farklar:
+  - Üretilenlerde parantez var: 100 kelimede 0.12–0.31, gerçekte ~0.
+  - Noktalı virgül daha az: Flash'ta metinlerin %20'si, gerçekte %48.
+  - Düz çift tırnak daha sık.
+  - Açılış kelimesi çoğunlukla "The"; gerçekte "Imagine", "Beneath", "Picture" gibi imgeli açılışlar.
+  - Kimi-K3'te kıvrık tırnak hiç yok: ’ %0 (gerçek Kimi %21–32), “” %0 (gerçek %13).
+- Asıl sebep metin türü: gerçek metinler edebi ve imgeli, üretilenler ansiklopedik açıklama. Geri kurulan prompt'lar
+  konuyu yakalıyor ama orijinal üslup talimatını kaçırıyor.
+
+**Maliyet:** toplam 1.217 $.
+- Prompt kurgulama 0.015 $.
+- GLM-5.3-Flash 0.016 $, GLM-5.3 0.112 $.
+- Kimi-K3 1.021 $: istek başına ~1.100 çıkış token'ı, çoğu düşünme. İlk 20 istek sunucu aksaklığıyla boş döndü (0.21 $).
+- Düşünme karşılaştırması ve denemeler 0.053 $.
+- Kayıt `data/external/featherless/costs.jsonl`'da.
+
+**Değerlendirme:**
+- GLM'lerde tam etiket uyumu gerçeğe yakın, ama lab düzeyinde zayıf (%23–25'e karşı %43–44). Üretilenler
+  sınıflandırıcıya gerçeklerden daha "Claude gibi" görünüyor.
+- Kimi-K3'te uyum zayıf.
+- Bu haliyle ölçekleme önerilmez. Önce prompt'lara üslup talimatı ekleyip GLM'lerde ucuz bir ikinci uyum testi
+  yapılabilir.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
@@ -613,3 +677,4 @@ eğitilmiş LoRA (ortalama havuzlama, kesilmiş katmanlar, daha yüksek öğrenm
 | 478 | st_emb8_qwen3_8b_base_C0.001_q0.2_w0.5_frac_hard_cf2_ORACLEpsplit | self-training (emb8: emb8_qwen3_8b_base_C0.001; held-out fold = unlabeled set of independent texts): select top 0.2 per predicted class, hard pseudo labels weight 0.5, crossfit 2 split by TRUE held-out prompt (DIAGNOSTIC, not deployable), rounds 1 (selftrain.py) | 0.4023 | 0.4023 ± 0.0310 | 1.7399 |  | 155s | balanced paired vs stage 0 (emb8_qwen3_8b_base_C0.001 recomputed, BA 0.4034 ll 1.7354): BA 0.4034 -> 0.4023 (diff -0.0011, 95% CI [-0.0063, +0.0041], P(diff<=0) 0.666); only A right 26, only B right 23; log loss 1.7354 -> 1.7399; per fold f0 0.415->0.421; f1 0.446->0.441; f2 0.419->0.419; f3 0.365->0.370; f4 0.372->0.361; pseudo rows/fold [106, 109, 108, 107, 108], pseudo-label acc [0.66, 0.679, 0.62, 0.542, 0.556]; skewed U(0.2,1) x2: mean diff -0.0011: s0 n1648 BA 0.4097->0.4097 (+0.0000 [-0.0066, +0.0069]) ll 1.8035->1.8066, folds [0.008, -0.007, -0.002, 0.005, -0.008] // s1 n1384 BA 0.3880->0.3858 (-0.0022 [-0.0107, +0.0067]) ll 1.7753->1.7773, folds [0.01, -0.01, -0.012, 0.018, -0.013]; stage 0 vs saved emb_qwen3_8b_base_C0.001: max abs dP 6.0e-03, BA 0.4045; not saved; src ac53033b0af1 |
 | 479 | st_emb8_qwen3_8b_base_C0.001_q1_w0.5_frac_hard_cf2 | self-training (emb8: emb8_qwen3_8b_base_C0.001; held-out fold = unlabeled set of independent texts): select top 1 per predicted class, hard pseudo labels weight 0.5, crossfit 2 (random per-text split), rounds 1 (selftrain.py) | 0.3082 | 0.3082 ± 0.0321 | 2.0314 |  | 193s | NOT helpful; also a code check of the submission-time path (--dry-save, load_test() texts as U, nothing saved); q1.0 = every held-out text pseudo-labeled; balanced paired vs stage 0 (emb8_qwen3_8b_base_C0.001 recomputed, BA 0.4034 ll 1.7354): BA 0.4034 -> 0.3082 (diff -0.0952, 95% CI [-0.1107, -0.0800], P(diff<=0) 1.000); only A right 325, only B right 68; log loss 1.7354 -> 2.0314; per fold f0 0.415->0.330; f1 0.446->0.354; f2 0.419->0.313; f3 0.365->0.270; f4 0.372->0.274; pseudo rows/fold [539, 540, 540, 540, 540], pseudo-label acc [0.416, 0.446, 0.419, 0.365, 0.372]; skewed U(0.2,1) x1: mean diff -0.0498: s0 n1648 BA 0.4097->0.3599 (-0.0498 [-0.0666, -0.0334]) ll 1.8035->2.0176, folds [-0.045, -0.074, -0.028, -0.048, -0.056]; stage 0 vs saved emb_qwen3_8b_base_C0.001: max abs dP 6.0e-03, BA 0.4045; not saved; src ac53033b0af1 |
 | 480 | selftrain_summary | summary: transductive self-training of per-text members, test texts as a set of independent texts (selftrain.py, aug_blend_check.py); scores = st_ng_char-word-fw_C100_q0.5_w0.5_frac_hard_cf2 | 0.3197 | 0.3197 ± 0.0133 | 2.1090 |  |  | SUMMARY: NOT helpful, nothing saved. Self-training with the held-out fold as an unlabeled set of independent texts (pseudo label = each text's own argmax, top fraction q per PREDICTED class, weight w, refit on training folds + pseudo rows, re-predict; random per-text crossfit S=2 so no text is predicted by a head trained on its own pseudo label; held-out labels only for scoring). Every deployable variant loses on the balanced held-out folds AND on the skewed ones (model keep rates U(0.2,1), seeds 1000/1001); all 95% CIs below 0. emb8 (raw qwen3_8b_base, scaler + LogReg C0.001 via Gram, stage 0 0.4034): q0.5 w0.5 hard cf2 -0.0619 [-0.0733, -0.0500], skewed -0.0335 / -0.0393 (row 463); no crossfit -0.0626, skewed -0.0504 / -0.0409 (464); q0.2 cf2 -0.0263, skewed -0.0154 / -0.0214 (465); q0.2 cf0 -0.0430 (466); soft top-3 -0.0222, skewed -0.0210 / -0.0231 (476); equal rows per class -0.0633, skewed -0.0296 / -0.0381 (477); q1.0 -0.0952, skewed -0.0498 (479): the loss grows with the number of pseudo rows. n-gram ng_char-word-fw_lr_C100_T (stage 0 = saved member exactly): q0.5 w0.5 cf2 -0.0478 [-0.0600, -0.0359], skewed -0.0297 / -0.0366 (462); in the blends (aug_blend_check.py, replacing the n-gram member; rows 468-474): CPU logloss blend 0.4038 -> 0.4015 (new member weight 0), base6 0.4541 -> 0.4426 (-0.0115 [-0.0204, -0.0030]), famc lab -0.0056, famc super -0.0052, GPU BA blend 0.4619 -> 0.4597 (-0.0022 [-0.0096, +0.0052]). Cause, from the DIAGNOSTIC rows 467 / 475 / 478 (not deployable: crossfit parts = whole held-out prompts by true prompt_id): every CV prompt has one text per model, so pseudo-labeled same-prompt siblings teach 'this topic = label X' and pull the other siblings towards labels they cannot have. Without siblings the effect is about zero or negative: emb8 q0.5 -0.0015 [-0.0078, +0.0048] (skewed -0.0071 / +0.0048), q0.2 -0.0011 [-0.0063, +0.0041] (skewed +0.0000 / -0.0022), n-gram -0.0037 [-0.0130, +0.0055] (skewed -0.0121 [-0.0226, -0.0017] / -0.0050). The hidden test has few texts per prompt (weaker sibling pull), but even the sibling-free estimate is <= 0, so there is no case for using it. Pseudo-label accuracy: top 50% per class 0.45-0.55 (emb8) / 0.41-0.51 (ng), top 20% 0.54-0.68 (emb8). The submission path (--dry-save, load_test() texts as U) was exercised on the 3 local test texts (row 479). A first smoke run (same config as row 463, 1 skewed seed) gave the same balanced numbers and is not logged separately; src 9c0d361b16f5 |
+| 481 | fx_fit_test_v1 | FEATHERLESS FIT TEST (not CV of a new model): generated texts of glm-5.3 (GLM-5.3), glm-5.3-flash (GLM-5.3-Flash), kimi-k3 (Kimi-K3) classified by the fold model that never saw their prompt (3-member CPU blend ng_fw + ng_fwsh + style2; BA column = that blend real-text OOF BA) | 0.3974 | nan ± nan | nan |  | 1500s | generated -> own label: flash 12.9% (real 15.1%), glm-5.3 15.3% (real 22.0%), kimi-k3 5.3% (real 31.6%); own lab: 23-25% vs real 43-44%, kimi 5% vs 32%; top confusion claude-sonnet-5; style: expository vs literary register, parentheses, fewer semicolons, Kimi no curly quotes; cost 1.217 USD; NOT used in any model; src 0805d2fc5e64 |

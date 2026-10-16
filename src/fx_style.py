@@ -52,6 +52,8 @@ def main():
     for run in a.runs:
         rows = [json.loads(l) for l in (F.EXT / f"gen_{run}.jsonl").read_text().splitlines() if l.strip()]
         g = pd.DataFrame(rows)
+        n_empty = int((g["text"].str.split().str.len() < 5).sum())
+        g = g[g["text"].str.split().str.len() >= 5].reset_index(drop=True)      # empty outputs reported, not scored
         lab = g["label"].iloc[0]
         real = tr[tr.model == lab].set_index("prompt_id")["text"]
         G = pd.DataFrame([feats(t) for t in g["text"]])
@@ -61,7 +63,7 @@ def main():
         tab = pd.DataFrame({"real_same_prompts": R[num_cols].mean(), "generated": G[num_cols].mean(),
                             "paired_diff": (G[num_cols] - R[num_cols]).mean(),
                             "real_all_label": A[num_cols].mean()}).round(3)
-        extra = {"run": run, "label": lab, "n": len(g),
+        extra = {"run": run, "label": lab, "n": len(g), "n_empty_dropped": n_empty,
                  "raw_newlines_share": float((g["newlines_removed"] > 0).mean()),
                  "raw_markdown_share": float((g["markdown_removed"] > 0).mean()),
                  "finish_reason": g["finish_reason"].value_counts().to_dict(),
