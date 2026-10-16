@@ -27,7 +27,7 @@ from joblib import Parallel, delayed
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedGroupKFold
 
-from augment import crop_stats, make_crops
+from augment import crop_stats, make_crops, make_splices
 from common import (K, OUT, encode_y, iter_folds, load_folds, load_member, load_test, load_train, log_experiment,
                     run_member, scores)
 from compare import fmt, paired_bootstrap
@@ -43,8 +43,10 @@ def fit_lr(args, A, y, sw):
     return lambda X: m.predict_log_proba(X)
 
 
-def run_fold(args, T_tr, y_tr, g_tr, T_cr, y_cr, src_cr, T_va, T_te):
-    """T_*: dict transform -> texts. src_cr: position (in the training fold) of each crop's source row."""
+def run_fold(args, T_tr, y_tr, g_tr, T_cr, y_cr, src_cr, T_va, T_te, src2_cr=None):
+    """T_*: dict transform -> texts. src_cr: position (in the training fold) of each crop's source row; src2_cr:
+    second source row of a splice (an augmented row is used only when all its sources are in the fitted rows)."""
+    src2_cr = src_cr if src2_cr is None else src2_cr
     b_tr, b_cr, b_va, b_te = [], [], [], []
     for f in args.feats.split("+"):
         tname = STREAMS[f][0]
@@ -61,7 +63,7 @@ def run_fold(args, T_tr, y_tr, g_tr, T_cr, y_cr, src_cr, T_va, T_te):
         """original rows `rows` (positions in the training fold) + the crops of those rows."""
         if A_cr is None:
             return A_tr[rows], y_tr[rows], np.ones(len(rows))
-        keep = np.flatnonzero(np.isin(src_cr, rows))
+        keep = np.flatnonzero(np.isin(src_cr, rows) & np.isin(src2_cr, rows))
         A = sp.vstack([A_tr[rows], A_cr[keep]]).tocsr()
         yy = np.concatenate([y_tr[rows], y_cr[keep]])
         sw = np.concatenate([np.ones(len(rows)), np.full(len(keep), args.crop_weight)])
@@ -86,7 +88,7 @@ def run_fold(args, T_tr, y_tr, g_tr, T_cr, y_cr, src_cr, T_va, T_te):
 def default_tag(args) -> str:
     t = f"ngaug_{args.feats.replace('+', '-')}_lr_C{args.C:g}_k{args.crops}"
     if args.crops:
-        t += f"_w{args.crop_weight:g}_{args.mode}"
+        t += f"_w{args.crop_weight:g}_{args.mode if args.aug == 'crop' else 'splice'}"
         if (args.lo, args.hi) != (0.5, 0.9):
             t += f"_r{args.lo:g}-{args.hi:g}"
         if args.min_words != 40:
@@ -108,6 +110,9 @@ def main():
     ap.add_argument("--C", type=float, default=100.0)
     ap.add_argument("--temp", action="store_true", help="inner-split temperature on the log-probabilities")
     ap.add_argument("--crops", type=int, default=1, help="crops per training text (0 = no augmentation)")
+    ap.add_argument("--aug", default="crop", choices=["crop", "splice"],
+                    help="splice: --crops same-label cut-and-splice texts per training text (augment.make_splices, "
+                         "partner from another prompt of the same training fold); --lo/--hi/--mode unused")
     ap.add_argument("--crop-weight", type=float, default=1.0)
     ap.add_argument("--lo", type=float, default=0.5)
     ap.add_argument("--hi", type=float, default=0.9)
@@ -135,9 +140,12 @@ def main():
     folds = load_folds(tr)
     groups = tr["prompt_id"].to_numpy()
     tag = args.tag or default_tag(args)
-    src, crops = make_crops(tr["id"].tolist(), tr["text"].tolist(), args.crops, args.lo, args.hi, args.min_words,
-                            args.mode, args.seed)
-    stats = crop_stats(tr["text"], src, crops)
+    src, crops = make_crops(tr["id"].tolist(), tr["text"].tolist(), args.crops if args.aug == "crop" else 0,
+                            args.lo, args.hi, args.min_words, args.mode, args.seed)
+    stats = crop_stats(tr["text"], src, crops) if args.aug == "crop" else (
+        "splices: %s (all train rows; per fold only training-fold partners)" % crop_stats(
+            tr["text"], *make_splices(tr["id"].tolist(), tr["text"].tolist(), y, groups, args.crops, args.seed,
+                                      args.min_words)[::2]))
     print(f"[{tag}] {stats}", flush=True)
     T_all = transformed_texts(args.feats, tr["text"].tolist())
     T_crop = transformed_texts(args.feats, crops)
@@ -149,7 +157,15 @@ def main():
         return {k: [v[i] for i in idx] for k, v in d.items()}
 
     jobs = []
+    ids, texts = tr["id"].to_numpy(), tr["text"].to_numpy()
     for _, trn, val in splits:
+        if args.aug == "splice":                           # generated from the training-fold rows only
+            sa, sb, spl = make_splices(ids[trn].tolist(), texts[trn].tolist(), y[trn], groups[trn], args.crops,
+                                       args.seed, args.min_words)
+            jobs.append(delayed(run_fold)(args, take(T_all, trn), y[trn], groups[trn],
+                                          transformed_texts(args.feats, spl), y[trn][sa], sa, take(T_all, val), T_te,
+                                          sb))
+            continue
         ci = np.flatnonzero(np.isin(src, trn))            # crops whose source row is in the training fold
         pos = np.searchsorted(trn, src[ci])                # trn is sorted (np.flatnonzero in iter_folds)
         assert (trn[pos] == src[ci]).all()
@@ -173,8 +189,10 @@ def main():
     SCRATCH.mkdir(parents=True, exist_ok=True)
     np.savez(SCRATCH / f"{tag}.npz", oof=oof, test=test, ba=s["ba"], logloss=s["logloss"])
     change = (f"per-text n-gram streams {args.feats} (min_df {args.min_df}) + LogReg C={args.C:g}"
-              f"{' + inner temperature' if args.temp else ''}; training-fold augmentation: {args.crops} sentence-window "
-              f"crop(s)/text ({args.mode}, {args.lo:g}-{args.hi:g} of sentences, >= {args.min_words} words, "
+              f"{' + inner temperature' if args.temp else ''}; training-fold augmentation: {args.crops} "
+              + (f"sentence-window crop(s)/text ({args.mode}, {args.lo:g}-{args.hi:g} of sentences, "
+                 if args.aug == "crop" else "same-label cut-and-splice text(s)/text (partner from another prompt, "
+                 "about half of each text, ") + f">= {args.min_words} words, "
               f"weight {args.crop_weight:g}{', renormalised' if args.renorm else ''}"
               f"{', per-text total weight 1' if args.balance == 'text' else ''}, vectorizer fit on "
               f"{args.vec_fit}, seed {args.seed}) (train_ngram_aug.py)")
@@ -182,6 +200,7 @@ def main():
                                  f"inner temps {temps}" if args.temp else ""] if x)
     if args.save:
         run_member(tag, change, oof, test, y, folds, t0, note=note, feats=args.feats, C=args.C, crops=args.crops,
+                   aug=args.aug,
                    crop_weight=args.crop_weight, lo=args.lo, hi=args.hi, min_words=args.min_words, mode=args.mode,
                    seed=args.seed, vec_fit=args.vec_fit, renorm=args.renorm, balance=args.balance, temps=temps,
                    script="train_ngram_aug.py")

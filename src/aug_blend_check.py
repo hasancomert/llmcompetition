@@ -4,6 +4,7 @@
             tfidf_charword_lr_C30, lr_style_tok_v2, ng_char-word-fw_lr_C100_T, ng_char-word-fw-shapew_lr_C300_T,
             lpx_style2_nolm_C0.003_T) with the --replace members swapped in; nested hill-climb (logprob, weights by
             log loss, same procedure as blend_pt.py / blend_baselines.py) vs the same procedure on the original set.
+(c) --gpu   blend_pt.py 'gpu_noglm' candidates (saved combiners) with the replacements (any member).
 (b) --famc  (n-gram member only) family_combine.py procedure re-run in-process with the new member in place of
             ng_char-word-fw_lr_C100_T as the 6th base member: base6 nested hill-climb, the lab and super-family
             combiners (specialists emb 8B C0.0003, emb 4B C0.001, lpstyle C0.03, ng char+word+fw C30, per family),
@@ -91,6 +92,8 @@ def main():
                     help="OLD=NEW applied to the REFERENCE set too (e.g. a no-temperature screening control)")
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--famc", action="store_true")
+    ap.add_argument("--gpu", action="store_true", help="blend_pt.py gpu_noglm candidates (saved combiners) with the "
+                                                      "replacements; nested hill-climb by BA and by log loss")
     ap.add_argument("--log", action="store_true")
     a = ap.parse_args()
     t0 = time.time()
@@ -147,6 +150,15 @@ def main():
             P_new, w_new = nested(arrays(True), y, folds, metric)
             used = lambda w: {t: round(float(x), 3) for t, x in zip(cand, w) if x > 0}  # noqa: E731
             report(f"gpu_noglm_{metric}", P_ref, P_new, y, folds, g, log,
+                   extra=f"weights ref {used(w_ref)}, new {used(w_new)}")
+    if a.gpu:
+        import blend_pt
+        cand = blend_pt.SETS["gpu_noglm"]
+        used = lambda w: {t: round(float(x), 3) for t, x in zip(cand, w) if x > 0}  # noqa: E731
+        for metric in ("ba", "logloss"):
+            P_ref, w_ref = nested([load_any(rrep.get(t, t)) for t in cand], y, folds, metric)
+            P_new, w_new = nested([load_any(rep.get(t, t)) for t in cand], y, folds, metric)
+            report(f"gpu_noglm_saved_famc_{metric}", P_ref, P_new, y, folds, g, log,
                    extra=f"weights ref {used(w_ref)}, new {used(w_new)}")
     print(f"done {time.time() - t0:.0f}s")
 

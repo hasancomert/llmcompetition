@@ -88,6 +88,40 @@ def crop_stats(texts, src, crops) -> str:
             f"(min {nw.min():.0f}, max {nw.max():.0f})")
 
 
+def make_splices(ids, texts, labels, groups, n_per: int = 1, seed: int = 0, min_words: int = 40):
+    """Same-label cut-and-splice texts: for every text A, a partner B with the same label and a different group
+    (prompt) is drawn from the GIVEN rows only (callers pass training-fold rows); the splice is A's leading
+    sentences (about half of A, cut at a random sentence boundary between 35% and 65% of its sentences) followed by
+    B's trailing sentences (about half of B), joined by A's own separator at the cut. Splices shorter than
+    `min_words` words are dropped. Seeded per (seed, crc32(id of A), draw); partners are chosen among candidates
+    sorted by id, so the result depends only on the rows given, their ids and the arguments.
+    Returns (srcA, srcB, splices) with srcA / srcB = positions in the given rows."""
+    ids = [str(i) for i in ids]
+    labels, groups = np.asarray(labels), np.asarray(groups)
+    order = np.argsort(ids, kind="stable")
+    spans_all = [sentence_spans(t) for t in texts]
+    sa, sb, out = [], [], []
+    for i, tid in enumerate(ids):
+        cand = [j for j in order if labels[j] == labels[i] and groups[j] != groups[i] and len(spans_all[j]) >= 2]
+        if len(spans_all[i]) < 2 or not cand:
+            continue
+        for d in range(n_per):
+            rng = np.random.default_rng([seed, zlib.crc32(tid.encode("utf-8")), d])
+            j = cand[int(rng.integers(len(cand)))]
+            A, B = spans_all[i], spans_all[j]
+            ka = int(np.clip(round(len(A) * rng.uniform(0.35, 0.65)), 1, len(A) - 1))
+            kb = int(np.clip(round(len(B) * rng.uniform(0.35, 0.65)), 1, len(B) - 1))
+            a_end, a_next = A[ka - 1][1], A[ka][0]
+            sep = texts[i][a_end:a_next] or " "
+            sp = texts[i][:a_end].strip() + sep + texts[j][B[kb][0]:].strip()
+            if len(_WORD.findall(sp)) < min_words:
+                continue
+            sa.append(i)
+            sb.append(j)
+            out.append(sp)
+    return np.asarray(sa, dtype=np.int64), np.asarray(sb, dtype=np.int64), out
+
+
 if __name__ == "__main__":
     from common import load_train
     tr = load_train()
