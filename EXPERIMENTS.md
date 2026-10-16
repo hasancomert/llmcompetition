@@ -193,6 +193,70 @@ kayıtlı üyeleri birebir yeniden üretiyor.
 - Bu haliyle ölçekleme önerilmez. Önce prompt'lara üslup talimatı ekleyip GLM'lerde ucuz bir ikinci uyum testi
   yapılabilir.
 
+## Dış derlem (olegzholobov/name-that-llm-response-corpus) ikinci değerlendirme (16 Ekim; dal `featherless-extra-data`)
+
+Kullanıcının 7 adımı. Yalnız `external_short_wide.parquet`; `external_all_wide` ile birleştirilmedi, `quarantine_luna_*`
+dışarıda. Profil, lisans ve sızıntı ayrıntıları `EXTERNAL_DATA.md`'de; satırlar 482–493 ve sonrası.
+
+**Transfer (dış veriyle eğit → resmi train'in tamamını tahmin et; `ext_transfer.py`):**
+- 23.658 dış satır, sınıf dengeli ağırlık: BA **0.092** (şans 0.056), lab doğruluğu 0.35.
+  - Model resmi metinlerin %55'ini gpt-5.6-luna, %19'unu gpt-5.6-sol, %17'sini claude-opus-4-6 diye tahmin ediyor.
+  - Recall: luna 0.67, opus-4-6 0.41, sol 0.29, gemini-3.1-pro 0.10. 12 etikette 0–0.013.
+- Yalnız speechmap (8.658 satır; en güçlü etiket kanıtı, 18 etiket): BA 0.062; resmi metinlerin %93'ü gpt-5.6-sol.
+- Karışıklık matrisi: `data/external/ntl_corpus/transfer_ext2off_*_confusion.csv`.
+
+**Etiket güvenilirliği (resmi train ile eğit → dış metinleri tahmin et; taban orana göre kaldıraç):**
+- claude-opus-5 bütün dış metinlerin %29'unu çekiyor. Bu yüzden ham doğruluk yerine kaldıraç kullanıldı:
+  P(tahmin=etiket | etiket) / P(tahmin=etiket).
+- İyi tanınanlar: gemini (6–44), gpt-5.5 (5.6), claude-sonnet-5 (3.1), claude-opus-5 (3.1), gpt-5.6-sol (2.8),
+  claude-opus-4-6 (2.5), gpt-5.6-luna (2.2), gpt-6-astra (2.1).
+- **Güvenilmez görünenler:**
+  - glm-5.3 (0.23) ve kimi-k3 (0.60) taban oranın altında.
+  - glm-5.3, glm-5.3-flash, kimi-k3 ve qwen3.8-max metinleri her kaynakta aile düzeyinde bile %1–9 tanınıyor; Claude
+    gibi görünüyorlar. Featherless'taki gerçek GLM-5.3 ve Kimi-K3 çıktılarında da aynı örüntü vardı.
+  - eqbench4'ün gemini-3.1-pro-preview satırları aile düzeyinde %5.6 tanınıyor; speechmap'te aynı etiket %62.5.
+  - Kodlama ve ajan kaynakları (SWEeper, Crownelius, greghavens) alan farkı yüzünden zayıf.
+
+**Asıl test (CV): aynı fold'lar, dış satırlar yalnız eğitim fold'larında, doğrulama yalnız resmi train.**
+- Konu eşleşmeli satırlar, eşleştikleri prompt_id doğrulamadayken çıkarılıyor.
+- n-gram üyelerinde sözlük yalnız resmi eğitim metinlerinden kuruluyor; özellik uzayı baseline ile aynı.
+- İç sıcaklık fit'leri, resmi satır görmemiş "yalnız dış veri" modelinden başlatılıyor (dürüst).
+
+| üye (dış veri yok) | w=0.05 | w=0.3 | w=1.0 | temiz alt küme, w=0.3 |
+|---|---|---|---|---|
+| ng_fw 0.3674 / 1.892 | sürüyor | 0.2878 / 2.097 (−0.080 [−0.099, −0.062]) | 0.2808 / 2.121 (−0.087 [−0.106, −0.068]) | sürüyor |
+| stil2 0.3382 / 1.917 | 0.3119 / 1.968 (−0.026 [−0.040, −0.013]) | 0.2682 / 2.131 (−0.070 [−0.088, −0.051]) | 0.2315 / 2.293 (−0.107 [−0.124, −0.089]) | 0.3030 / 2.041 (−0.035 [−0.051, −0.019]) |
+| stil+tok LR 0.2993 / 2.028 | – | 0.2241 / 2.251 (−0.075 [−0.093, −0.057]) | 0.1804 / 2.515 (−0.119 [−0.140, −0.099]) | – |
+| SVC char | – | sürüyor | iptal (süre) | – |
+| ng_fwsh | – | sürüyor | iptal (süre) | – |
+
+- Hücrelerde BA / log loss (eşli fark, %95 GA).
+- "Temiz alt küme": yalnız açık lisanslı kaynaklar, glm/kimi/qwen satırları hariç (11.395 satır).
+
+**Blend: cpu2 ile aynı iç içe hill-climb; sınıf başı bias da iç içe (`ext_blend.py`).**
+- Ara sonuç: 5 üyenin 3'ü dış veriyle. SVC ve ng_fwsh baseline sürümleriyle duruyor.
+
+| varyant | BA | eşli fark | BA, bias ile | log loss |
+|---|---|---|---|---|
+| baseline (cpu2) | 0.4038 | – | 0.3960 | 1.717 |
+| dış veriyle eğitilmiş üyeler, w=0.3 | 0.3897 | −0.014 [−0.026, −0.003] | 0.3811 | 1.756 |
+| + analitik öncül düzeltmesi, w=0.3 | 0.3915 | −0.012 [−0.024, −0.001] | 0.3778 | 1.765 |
+| dış veriyle eğitilmiş üyeler, w=1.0 | 0.3915 | −0.012 [−0.024, −0.001] | 0.3785 | 1.757 |
+| birleşik (eski + dış veriyle eğitilmiş üyeler aday), w=0.3 | 0.4075 | +0.004 [−0.004, +0.012] | 0.4012 | 1.714 |
+
+- Sınıf başı bias düzeltmesi her varyantta BA'yı 0.008–0.018 düşürüyor.
+- Sınıf başına recall değişimi (w=0.3, bias ile):
+  - Düşenler: gpt-5.6-luna −0.15, claude-sonnet-5 −0.07, claude-fable-5 −0.07, glm-5.3 −0.06, gpt-5.5 −0.06.
+  - Artanlar: glm-5.3-flash +0.07, claude-opus-4-8 +0.05, gpt-5.6-terra +0.05.
+- glm-5.3 ↔ glm-5.3-flash: glm-5.3→flash 18'den 25'e, flash→glm-5.3 37'den 30'a. glm-5.3 recall'u 0.23'ten 0.17'ye.
+
+**Değerlendirme (ara):**
+- Dış veri her üyede, her ağırlıkta (0.05–1.0) ve temiz alt kümede bile CV'yi düşürüyor.
+- Blend'de anlamlı kazanç yok.
+- Sebep alan ve üslup farkı (tartışmalı konu denemeleri, reddetmeler, diyaloglar, kod) ve dört etiketin dış
+  metinlerinin resmi metinlere hiç benzememesi.
+- Final submission'a önerilmez; karar kullanıcının. Bayrak (`--ext`, varsayılan kapalı) kodda duruyor.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
