@@ -22,6 +22,12 @@ import kaggle_benchmarks as kbench
 SPLIT = "dev"          # rows_<SPLIT>.csv of the attached dataset (dev: 3 templates x 10 prompts; eval: 1 x 20)
 REASONING = "low"      # same as the Featherless runs (reasoning_effort=low); falls back to the model default
 TEMPERATURE = 1.0      # provider default for these models; ignored where the model does not take a temperature
+MAX_OUT = 8000         # output-token cap: the proxy reserves the worst-case cost (model maximum output) per call and
+                       # refuses calls (403) when the reservations exceed the quota; answers use ~200-2000 tokens
+CAP_KEYS = ("max_completion_tokens", "max_output_tokens", "max_tokens")   # tried in order (client paths differ)
+SKIP = {"dev": {"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview", "gpt-5.6-luna", "gpt-5.6-terra",
+                "claude-sonnet-5", "claude-opus-4-8",          # dev already generated (version 1 of this task)
+                "gpt-5.5", "gpt-6-astra"}}                     # dev skipped for cost (5 USD cap): eval only
 
 LABEL_OF = {           # Kaggle Benchmarks model (proxy slug and catalog slug) -> competition label
     "openai/gpt-5.5-2026-04-23": "gpt-5.5", "gpt-5.5-2026-04-23": "gpt-5.5",
@@ -43,18 +49,29 @@ LABEL = LABEL_OF.get(MODEL)
 paths = sorted(glob.glob(f"/kaggle/input/**/rows_{SPLIT}.csv", recursive=True))
 assert paths, f"rows_{SPLIT}.csv not found: attach hasancmert/nllm-ft2-prompts"
 rows = pd.read_csv(paths[0], keep_default_na=False)
-# an unknown model (e.g. the run made when the task is created) writes a single row only: no cost leaks
-todo = rows[rows["label"] == LABEL] if LABEL else rows.head(1)
+# an unknown model, or a label already done / skipped for this split (e.g. the run made when the task is created),
+# writes a single row only: no cost leaks
+todo = rows[rows["label"] == LABEL] if LABEL and LABEL not in SKIP.get(SPLIT, set()) else rows.head(1)
 print(f"model {MODEL!r} -> label {LABEL!r}; {len(todo)} rows of {paths[0]}", flush=True)
 
 
 def _ask(llm, row_id, system, user_message, reasoning):
-    with kbench.chats.new(f"{row_id}-{reasoning or 'default'}", system_instructions=system or None) as chat:
+    """One fresh chat per attempt; the output cap is passed under the first parameter name the client accepts.
+    A quota refusal (403) is not retried with another name."""
+    last = None
+    for key in CAP_KEYS:
+        kw = {"temperature": TEMPERATURE, "extra_api_params": {key: MAX_OUT}}
         if reasoning:
-            text = llm.prompt(user_message, temperature=TEMPERATURE, reasoning=reasoning)
-        else:
-            text = llm.prompt(user_message, temperature=TEMPERATURE)
-        return text, chat.usage
+            kw["reasoning"] = reasoning
+        try:
+            with kbench.chats.new(f"{row_id}-{reasoning or 'default'}-{key}", system_instructions=system or None) as chat:
+                text = llm.prompt(user_message, **kw)
+                return text, chat.usage, key
+        except Exception as e:
+            if "403" in str(e) or "PermissionDenied" in type(e).__name__:
+                raise
+            last = e
+    raise last
 
 
 # %%
@@ -62,20 +79,23 @@ def _ask(llm, row_id, system, user_message, reasoning):
 def nllm_gen_ft2(llm, row_id: str, system: str, user_message: str) -> dict:
     t0 = time.time()
     try:
-        text, usage = _ask(llm, row_id, system, user_message, REASONING)
+        text, usage, cap_key = _ask(llm, row_id, system, user_message, REASONING)
         mode = REASONING
     except Exception as e:  # model without a reasoning setting: its default, in a fresh chat
-        text, usage = _ask(llm, row_id, system, user_message, None)
+        if "403" in str(e) or "PermissionDenied" in type(e).__name__:
+            raise
+        text, usage, cap_key = _ask(llm, row_id, system, user_message, None)
         mode = f"default ({type(e).__name__})"
     text = re.sub(r"<think>.*?</think>\s*", "", str(text), flags=re.S).strip()
-    return {"row_id": row_id, "text": text, "reasoning": mode, "input_tokens": usage.input_tokens,
+    return {"row_id": row_id, "text": text, "reasoning": mode, "max_out": MAX_OUT, "cap_key": cap_key,
+            "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens, "cost_nanodollars": usage.total_cost_nanodollars,
             "seconds": round(time.time() - t0, 1)}
 
 
 # %%
 runs = nllm_gen_ft2.evaluate(llm=[kbench.llm], evaluation_data=todo[["row_id", "system", "user_message"]],
-                             n_jobs=2, timeout=900, max_attempts=3, retry_delay=15, on_failure="continue")
+                             n_jobs=2, timeout=900, max_attempts=4, retry_delay=30, on_failure="continue")
 out = []
 for r in runs.runs:
     rec = {"row_id": r.params.get("row_id")}

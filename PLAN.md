@@ -396,6 +396,16 @@ GPU bütçesi:
   - 0.05'ten küçük farkta T0 seçilir (en basit olan).
   - Bütün etiketlere tek şablon.
 - **Eşik (yalnız EVAL):** etiket r ≥ 0.7 ise geçer. Geçmeyen etiket ölçeklenmez.
+- **Uygulamada çıkan sapmalar (16 Ekim gece, maliyet yüzünden):**
+  - Kaggle'daki ilk koşular tahminden pahalı çıktı; Gemini modelleri "low" ayarında bile cevap başına 600–2.000 token
+    düşünüyor.
+  - 12 Kaggle modelinin hepsiyle DEV ve EVAL ~5.9 $ tutuyordu (tavan 5 $).
+  - Bu yüzden en pahalı iki model (gpt-5.5, gpt-6-astra) DEV'e girmedi. Şablon 13 etiketin r medyanıyla seçiliyor; bu
+    ikisi yalnız EVAL'de seçilen şablonla sınanıyor.
+  - Proxy her çağrıdan önce modelin en uzun çıktısına göre maliyet ayırıyor ve kota aşılınca 403 veriyor.
+    claude-opus-4-6 ve gpt-5.6-sol böyle başarısız oldu.
+  - Task'ın 2. sürümü çıktıyı 8.000 token ile sınırlıyor. Normal kullanım 200–2.000 token olduğundan metinleri
+    etkilemiyor.
 - **CV kontrolü:**
   - Seçilen şablonla üretilen metinler (30 prompt) eğitim fold'larına eklenir. Prompt'u doğrulamadaki satırlar o
     fold'dan çıkarılır.
