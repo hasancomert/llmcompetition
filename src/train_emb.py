@@ -72,6 +72,67 @@ def center_by_clusters(X, texts, thr, min_size=3):
 
 
 def center_sim(Xtr_raw, y, folds, texts, thr, C, sims, seed=0):
+    """Test-like check of prompt centering. Training side as at submission time: every row of the training folds,
+    centered with clusters of the training-fold texts. Test side: rows of the held-out fold are dropped with
+    model-specific keep rates (unequal test counts), the kept texts are clustered ON THEIR OWN (as the test is) and
+    centered with those clusters. Raw and centered features are scored on the same kept rows (paired).
+    (A first version also dropped training rows; that made the training classes unbalanced and confounded the
+    comparison.)"""
+    from matching import drop_mask
+    from common import metrics
+    rng = np.random.default_rng(seed)
+    n_f = int(folds.max()) + 1
+    fold_models = {}
+    for k in range(n_f):                                     # training side does not depend on the simulation
+        trn = np.flatnonzero(folds != k)
+        Xc_tr, _ = center_by_clusters(Xtr_raw[trn], [texts[i] for i in trn], thr)
+        fold_models[k] = (make_model("emb", C).fit(Xtr_raw[trn], y[trn]), make_model("emb", C).fit(Xc_tr, y[trn]))
+    res = []
+    for sim in range(sims):
+        keep = np.flatnonzero(drop_mask(y, None, rng, 0.35, 1.0))
+        P_raw, P_ctr = np.zeros((len(keep), K)), np.zeros((len(keep), K))
+        fk = folds[keep]
+        for k in range(n_f):
+            loc = np.flatnonzero(fk == k)
+            rows = keep[loc]
+            Xc_va, _ = center_by_clusters(Xtr_raw[rows], [texts[i] for i in rows], thr)
+            m_raw, m_ctr = fold_models[k]
+            P_raw[loc] = m_raw.predict_proba(Xtr_raw[rows])
+            P_ctr[loc] = m_ctr.predict_proba(Xc_va)
+        out = {"raw": metrics.balanced_accuracy(y[keep], P_raw), "centered": metrics.balanced_accuracy(y[keep], P_ctr),
+               "ll_raw": metrics.mlogloss(y[keep], P_raw), "ll_centered": metrics.mlogloss(y[keep], P_ctr)}
+        res.append(out)
+        print(f"sim {sim}: kept {len(keep)} rows, raw BA {out['raw']:.4f} / ll {out['ll_raw']:.4f}, "
+              f"centered BA {out['centered']:.4f} / ll {out['ll_centered']:.4f}", flush=True)
+    d = np.array([r["centered"] - r["raw"] for r in res])
+    print(f"centering under test-like drops (full training folds): mean BA diff {d.mean():+.4f} "
+          f"(per sim {np.round(d, 4).tolist()})", flush=True)
+    return res
+
+
+def load_feats(kind, names, split):
+    mats = []
+    for nm in names:
+        meta = json.loads((EMB / f"meta_{nm}_{split}.json").read_text())
+        mats.append(np.load(EMB / f"{kind}_{nm}_{split}.npy").astype(np.float32))
+        mats[-1] = (mats[-1], meta)
+    return mats
+
+
+def center_by_clusters(X, texts, thr, min_size=3):
+    """Subtract each unsupervised cluster's mean; clusters smaller than min_size are left as they are (a singleton
+    would become an all-zero row)."""
+    from matching import cluster_prompts
+    g = cluster_prompts(texts, thr)
+    Xc = X.copy()
+    for c in np.unique(g):
+        ix = g == c
+        if ix.sum() >= min_size:
+            Xc[ix] -= X[ix].mean(0)
+    return Xc, g
+
+
+def center_sim(Xtr_raw, y, folds, texts, thr, C, sims, seed=0):
     """Test-like check of prompt centering (audit finding: on full train grids a cluster mean is pure topic, on the
     test it also carries the styles of whichever models are present). Per simulation: drop rows with model-specific
     keep rates, cluster only the kept texts, center kept rows with those clusters, fit/score per fold on kept rows;
