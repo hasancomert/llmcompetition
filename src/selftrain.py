@@ -79,8 +79,11 @@ def select_pseudo(P, q, sel="frac", thr=None, labels="hard", w=0.5):
     return np.repeat(pos, 3), top.ravel(), (w * pt).ravel()
 
 
-def self_train(fit_predict, L, yL, U, P0U, cfg, rng):
-    """One or more rounds of self-training; returns (P1 for the U rows, list of selected positions per round)."""
+def self_train(fit_predict, L, yL, U, P0U, cfg, rng, U_groups=None):
+    """One or more rounds of self-training; returns (P1 for the U rows, list of selected positions per round).
+    U_groups (DIAGNOSTIC ONLY, CV simulation with --oracle-prompt-split): the crossfit parts are whole prompts, so
+    no row is predicted by a head trained on pseudo-labeled texts of its own prompt. Not deployable (it needs the
+    prompt of every unlabeled text); it only measures how much of the CV effect comes from same-prompt siblings."""
     P = P0U
     picks = []
     for _ in range(cfg["rounds"]):
@@ -94,7 +97,11 @@ def self_train(fit_predict, L, yL, U, P0U, cfg, rng):
             Pn = fit_predict(np.r_[L, U[pos]], np.r_[yL, lab], np.r_[ones, wt], U)
         else:
             Pn = np.zeros_like(P)
-            part = rng.permutation(len(U)) % S
+            if U_groups is None:
+                part = rng.permutation(len(U)) % S
+            else:
+                ug, inv = np.unique(U_groups, return_inverse=True)
+                part = (rng.permutation(len(ug)) % S)[inv]
             for s in range(S):
                 use = part[pos] != s
                 ev = np.flatnonzero(part == s)
@@ -187,7 +194,7 @@ BACKENDS = {"emb8": EmbBackend, "ng": NgBackend}
 
 # ---------------------------------------------------------------- per-fold work
 
-def fold_job(be, k, y, folds, keeps, cfgs, seed, with_test, n_tr, n_te):
+def fold_job(be, k, y, folds, keeps, cfgs, seed, with_test, n_tr, n_te, groups=None):
     trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
     ctx = be.prepare(k)
     p0_val = be.stage0(ctx, k, trn, val)
@@ -195,14 +202,16 @@ def fold_job(be, k, y, folds, keeps, cfgs, seed, with_test, n_tr, n_te):
     out = {"P0": p0_val, "T": ctx["T"], "res": []}
     for ci, cfg in enumerate(cfgs):
         r = {}
-        P1, picks = self_train(fp, trn, y[trn], val, p0_val, cfg, np.random.default_rng([seed, k, ci, 0]))
+        P1, picks = self_train(fp, trn, y[trn], val, p0_val, cfg, np.random.default_rng([seed, k, ci, 0]),
+                               None if groups is None else groups[val])
         pos, lab = picks[0]
         r["bal"] = (P1, len(pos), float(np.mean(lab == y[val][pos])) if len(pos) else float("nan"))
         r["skew"] = []
         for s, keep in enumerate(keeps):
             loc = np.flatnonzero(keep[val])
             U = val[loc]
-            P1s, picks_s = self_train(fp, trn, y[trn], U, p0_val[loc], cfg, np.random.default_rng([seed, k, ci, s + 1]))
+            P1s, picks_s = self_train(fp, trn, y[trn], U, p0_val[loc], cfg, np.random.default_rng([seed, k, ci, s + 1]),
+                                      None if groups is None else groups[U])
             r["skew"].append((loc, P1s))
         if with_test and ci == 0:
             te_rows = n_tr + np.arange(n_te)
@@ -242,12 +251,16 @@ def main():
     ap.add_argument("--skew", type=int, default=3, help="number of seeded skewed held-out sets (keep U(0.2,1))")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-jobs", type=int, default=1)
+    ap.add_argument("--oracle-prompt-split", action="store_true",
+                    help="DIAGNOSTIC (not deployable): crossfit parts = whole held-out prompts (true prompt_id)")
     ap.add_argument("--recompute-p0", action="store_true", help="ng: compute stage 0 here even if the member exists")
     ap.add_argument("--scratch", action="store_true", help="write outputs/aug_scratch/<tag>.npz (oof) per config")
     ap.add_argument("--log", action="store_true", help="one EXPERIMENTS.md row per config (not saved)")
     ap.add_argument("--save", default=None, help="save the FIRST config as member TAG (test = load_test() as U)")
     ap.add_argument("--note", default="")
     a = ap.parse_args()
+    if a.oracle_prompt_split:
+        assert not a.save and all(c >= 2 for c in a.crossfit), "diagnostic only, needs --crossfit >= 2"
     if a.C is None:
         a.C = 0.001 if a.member == "emb8" else 100.0
     t0 = time.time()
@@ -260,12 +273,13 @@ def main():
             for q, w, s, lb, cf in itertools.product(a.q, a.w, a.sel, a.labels, a.crossfit)]
     be = BACKENDS[a.member](a, tr, te, y, folds, groups)
     n_f = int(folds.max()) + 1
+    gdiag = groups if a.oracle_prompt_split else None
     if a.n_jobs > 1:
         from joblib import Parallel, delayed
-        outs = Parallel(n_jobs=a.n_jobs)(delayed(fold_job)(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save), n_tr, n_te)
+        outs = Parallel(n_jobs=a.n_jobs)(delayed(fold_job)(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save), n_tr, n_te, gdiag)
                                          for k in range(n_f))
     else:
-        outs = [fold_job(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save), n_tr, n_te) for k in range(n_f)]
+        outs = [fold_job(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save), n_tr, n_te, gdiag) for k in range(n_f)]
     print(f"folds done {time.time() - t0:.0f}s; temps {[round(o['T'], 3) for o in outs]}", flush=True)
 
     P0 = np.zeros((n_tr, K))
@@ -284,7 +298,7 @@ def main():
     print(f"stage 0 ({base}): BA {s0['ba']:.4f} ll {s0['logloss']:.4f} folds {np.round(s0['ba_folds'], 4).tolist()}; "
           f"{ref_note}", flush=True)
     for ci, cfg in enumerate(cfgs):
-        name = f"st_{base}_{cfg_name(cfg)}"
+        name = f"st_{base}_{cfg_name(cfg)}" + ("_ORACLEpsplit" if a.oracle_prompt_split else "")
         P1 = np.zeros((n_tr, K))
         nsel, pacc = [], []
         for k, o in enumerate(outs):
@@ -322,7 +336,9 @@ def main():
         desc = (f"self-training ({a.member}: {base}; held-out fold = unlabeled set of independent texts): select "
                 f"{'top ' + format(cfg['q'], 'g') + ' per predicted class' if cfg['sel'] == 'frac' else format(cfg['q'], 'g') + '*|U|/K rows per predicted class'}"
                 f"{', thr ' + format(cfg['thr'], 'g') if cfg['thr'] is not None else ''}, {cfg['labels']} pseudo labels "
-                f"weight {cfg['w']:g}, crossfit {cfg['crossfit']}, rounds {cfg['rounds']} (selftrain.py)")
+                f"weight {cfg['w']:g}, crossfit {cfg['crossfit']}"
+                f"{' split by TRUE held-out prompt (DIAGNOSTIC, not deployable)' if a.oracle_prompt_split else ' (random per-text split)' if cfg['crossfit'] >= 2 else ''}"
+                f", rounds {cfg['rounds']} (selftrain.py)")
         note = (f"balanced paired vs stage 0 ({base} recomputed, BA {s0['ba']:.4f} ll {s0['logloss']:.4f}): {fmt(cmp_b)}; "
                 f"per fold {per_fold}; pseudo rows/fold {nsel}, pseudo-label acc {np.round(pacc, 3).tolist()}; "
                 + (f"skewed U(0.2,1) x{a.skew}: mean diff {np.mean(sk_d):+.4f}: " + " | ".join(sk_txt) if a.skew else "")
