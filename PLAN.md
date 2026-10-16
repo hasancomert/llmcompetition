@@ -369,6 +369,39 @@ GPU bütçesi:
   6. **Veri kuralları:** çıktılar `data/external/` altında kalır ve her satır kaynak bilgisi taşır. Dış veri kuralı
      netleşene kadar bu veriyle eğitilen model final submission'a girmez.
 
+### Uyum testi v2 (kullanıcı onayı 16 Ekim akşamı; kurallar üretimden ÖNCE yazıldı)
+
+- **Kapsam:** 15 etiket.
+  - Kaggle Benchmarks (12 etiket): üretim Kaggle altyapısında private bir task olarak; yerel token ile toplu üretim yok.
+  - Featherless (3 etiket): glm-5.3, glm-5.3-flash, kimi-k3.
+- **Tavanlar:** Kaggle 5 $, Featherless 1 $.
+- **Prompt'lar:** 30 geri kurulmuş train prompt'u, fold başına 6 (`src/ft2_rows.py`, tohum 20261017).
+  - Yalnız step-3 T0 çıktıları üç Featherless etiketinde de kullanılabilir olan 38 prompt arasından seçildi.
+  - Fold başına 2'si DEV (10 prompt): şablon burada seçilir.
+  - 4'ü EVAL (20 prompt): eşik yalnız burada, seçilen şablonla sınanır.
+  - Bu prompt'lar ve onlardan üretilen metinler yarışma verisinden türüyor: hiçbir yere public konmaz.
+    Kaggle dataset'i ve task private.
+- **Şablonlar** (noktalama ya da kelime alışkanlığı dayatmıyor):
+  - T0: "Answer in a single paragraph of about N words." (v1 ile aynı)
+  - T1: edebi üslup notu (canlı düzyazı, somut imge, değişken cümle ritmi, düz metin)
+  - T2: denemeci sistem prompt'u + "Keep it to one paragraph of about N words."
+  - N, aynı prompt ve etiketin train metninin kelime sayısı.
+- **Ayarlar:** temperature 1.0 (model kabul ediyorsa), düşünme `low` (kabul edilmezse modelin varsayılanı).
+- **Ölçüm:** her üretilen metni, prompt'unu görmemiş fold modeli tahmin eder.
+  - Model: 3 CPU üyesinin blend'i (ng_fw + ng_fwsh + style2; `fx_predict.py`).
+  - Ana ölçüt, etiket ve şablon başına: r = ort. P(kendi etiketi | üretilen) / ort. P(kendi etiketi | aynı prompt'ların
+    gerçek metni).
+  - Ek olarak raporlanır: kendi etiketi ve kendi lab'ı doğruluğu (üretilen ve gerçek).
+- **Şablon seçimi (yalnız DEV):** 15 etiketin r medyanı en yüksek olan şablon.
+  - 0.05'ten küçük farkta T0 seçilir (en basit olan).
+  - Bütün etiketlere tek şablon.
+- **Eşik (yalnız EVAL):** etiket r ≥ 0.7 ise geçer. Geçmeyen etiket ölçeklenmez.
+- **CV kontrolü:**
+  - Seçilen şablonla üretilen metinler (30 prompt) eğitim fold'larına eklenir. Prompt'u doğrulamadaki satırlar o
+    fold'dan çıkarılır.
+  - Ağırlıklar 0.3 ve 1.0; cpu2 üyeleri ve iç içe blend (`ext_blend.py`).
+  - BA, log loss ve etiket bazında recall raporlanır. Ölçekleme kararını kullanıcı CV'ye göre verir.
+
 ## 6. Çalışma kuralları (kullanıcıdan)
 
 - Kararlar CV'ye göre; her deney `EXPERIMENTS.md`'de (no, değişiklik, CV BA, CV log loss, varsa public LB). İşe yaramayanlar da yazılır.
