@@ -406,6 +406,19 @@ GPU bütçesi:
     claude-opus-4-6 ve gpt-5.6-sol böyle başarısız oldu.
   - Task'ın 2. sürümü çıktıyı 8.000 token ile sınırlıyor. Normal kullanım 200–2.000 token olduğundan metinleri
     etkilemiyor.
+- **Gerçekleşen harcama (16 Ekim gece, EVAL sonrası):**
+  - Kaggle: proxy kotasına göre 4,933 $ (tavan 5 $). 12 Kaggle etiketinin hepsi EVAL'de 20/20 metinle koştu.
+    - Task'ın kaydettiği çağrı maliyetleri toplamı, ilk sürümlerde kotadan 0,72 $ az. Fark büyük olasılıkla 1. sürümün
+      403'le biten koşularından ve task oluşturma koşularından geliyor.
+    - 3. sürümden itibaren kota artışı kayıtlı maliyetle birebir aynı. Ölçekleme tahminleri bu yüzden kayıtlı maliyetle
+      yapılabilir.
+    - gemini-3.1-pro EVAL'de DEV'den pahalı çıktı: 0,62 $; cevap başına ortalama 2.575 çıktı token'ı.
+    - Kalan bütçeye sığması için sıra: önce CV recall'u en düşük olan gpt-5.5, sonra gpt-6-astra, en son gemini-3.1-pro.
+  - Featherless: 1,0105 $ (tavan 1 $).
+    - 0,0105 $'lık aşım, aynı anda giden iki isteğin bütçe kontrolünü birlikte geçmesinden. Kontrol düzeltildi:
+      uçuştaki istekler en kötü maliyetleriyle sayılıyor (commit 7650a59).
+    - kimi-k3 EVAL'de tavana takıldı: 20 metnin 5'i üretildi. Kimi uzun düşünüyor; 5 metin için 9 çağrı, çağrı başına
+      ~0,027 $. Kimi'nin EVAL r'si 5 metne dayanıyor.
 - **CV kontrolü:**
   - Seçilen şablonla üretilen metinler (30 prompt) eğitim fold'larına eklenir. Prompt'u doğrulamadaki satırlar o
     fold'dan çıkarılır.
