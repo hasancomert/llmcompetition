@@ -282,8 +282,9 @@ def _run_fold_ext(args, texts_tr, y_tr, g_tr, texts_va, texts_te, ext):
     t0 = time.time()
     it = lambda g: getattr(getattr(g, "model", None), "n_iter_", [0])[0]
     init = None
-    if args.model == "lr":                    # start point that has seen no official row (see the module docstring)
-        clean = np.array([i for i, s in enumerate(leak_e) if not s], dtype=int)
+    clean = np.array([i for i, s in enumerate(leak_e) if not s], dtype=int)
+    if args.model == "lr" and len(clean):     # start point that has seen no official row (see the module docstring);
+                                              # none when every row answers a train prompt (--ext ft2): cold fits
         f_e = fit_logits(args, A_e[clean], y_e[clean], w_e[clean])
         cls = f_e.model.classes_                  # labels without external rows (--ext-drop-labels) get zero weights
         coef, inter = np.zeros((K, A_e.shape[1])), np.full(K, float(f_e.model.intercept_.min()))
