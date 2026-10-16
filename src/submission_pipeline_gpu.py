@@ -35,6 +35,7 @@ TFC = argparse.Namespace(feats="char", max_features=50_000, thr=0.92, C=0.3, mod
 CENTER_THRESHOLD = 0.92
 MATCH_MIN_ROWS, MATCH_LAMBDA, MATCH_THRESHOLD = 40, 2.0, 0.92
 V1_WEIGHTS = {"charword": 2 / 3, "style": 1 / 3}
+CTR_CPU_WEIGHTS = {"tfc": 0.5, "stylec": 0.5}   # nested logloss hill-climb of tfc + style+tok_ctr: CV 0.4675
 
 
 def log(msg, t0):
@@ -78,6 +79,9 @@ def main():
     ap.add_argument("--out", default="submission.parquet")
     ap.add_argument("--work", default="/kaggle/temp/nllm")
     ap.add_argument("--cpu-only", action="store_true", help="skip the GPU members (fallback path test)")
+    ap.add_argument("--members", default="v3", choices=["v3", "ctr-cpu"],
+                    help="v3: tfc+lpc+emb4c+emb8c (GPU); ctr-cpu: tfc + centered style+tok only (no LM, CPU)")
+    ap.add_argument("--match-lambda", type=float, default=MATCH_LAMBDA, help="0 = plain argmax (no matching)")
     ap.add_argument("--precomputed-lm", default="", help="LOCAL TEST: load emb/lp npy from this dir instead of the GPU")
     args = ap.parse_args()
     t0 = time.time()
@@ -122,22 +126,30 @@ def main():
             ctr_tr = lambda X: center_groups(X, g_tr)
             log(f"centering clusters: train {len(np.unique(g_tr))}"
                 + (f", test {len(np.unique(g_te))}" if n_te >= MATCH_MIN_ROWS else ", test: global mean"), t0)
-            if args.precomputed_lm:
+            if args.members == "ctr-cpu":                                # ablation: no LM features
+                members_oof["stylec"], members_te["stylec"] = fold_fit("lp", C_LP, ctr_tr(S_tr), ctr_te(S_te), y,
+                                                                       folds)
+                log(f"member stylec: OOF BA {metrics.balanced_accuracy(y, members_oof['stylec']):.4f} "
+                    f"(local CV 0.3782)", t0)
+                F = None
+            elif args.precomputed_lm:
                 pdir = Path(args.precomputed_lm)
                 g = lambda kind, n, split: np.load(pdir / f"{kind}_{n}_{split}.npy").astype(np.float32)
                 F = {n: (g("emb", n, "train"), g("emb", n, "test"), g("lp", n, "train"), g("lp", n, "test"))
                      for n, _ in LM_MODELS}
             else:
                 F = extract_lm_features(tr, te, Path(args.work), t0)
-            lp_tr = ctr_tr(np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr]).astype(np.float32))
-            lp_te = ctr_te(np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te]).astype(np.float32))
-            members_oof["lpc"], members_te["lpc"] = fold_fit("lp", C_LP, lp_tr, lp_te, y, folds)
-            log(f"member lpc: OOF BA {metrics.balanced_accuracy(y, members_oof['lpc']):.4f} (local CV 0.4016)", t0)
-            for key, name, ref in (("emb4c", "qwen3_4b_base", "0.5498"), ("emb8c", "qwen3_8b_base", "0.5583")):
-                members_oof[key], members_te[key] = fold_fit("emb", C_EMB, ctr_tr(F[name][0]), ctr_te(F[name][1]),
-                                                             y, folds)
-                log(f"member {key}: OOF BA {metrics.balanced_accuracy(y, members_oof[key]):.4f} (local CV {ref})",
+            if F is not None:
+                lp_tr = ctr_tr(np.hstack([F[n][2] for n, _ in LM_MODELS] + [S_tr]).astype(np.float32))
+                lp_te = ctr_te(np.hstack([F[n][3] for n, _ in LM_MODELS] + [S_te]).astype(np.float32))
+                members_oof["lpc"], members_te["lpc"] = fold_fit("lp", C_LP, lp_tr, lp_te, y, folds)
+                log(f"member lpc: OOF BA {metrics.balanced_accuracy(y, members_oof['lpc']):.4f} (local CV 0.4016)",
                     t0)
+                for key, name, ref in (("emb4c", "qwen3_4b_base", "0.5498"), ("emb8c", "qwen3_8b_base", "0.5583")):
+                    members_oof[key], members_te[key] = fold_fit("emb", C_EMB, ctr_tr(F[name][0]),
+                                                                 ctr_te(F[name][1]), y, folds)
+                    log(f"member {key}: OOF BA {metrics.balanced_accuracy(y, members_oof[key]):.4f} "
+                        f"(local CV {ref})", t0)
             del F
             fp = train_tfidf_ctr.make_fit_predict(TFC, tr["prompt_id"].to_numpy())
             members_oof["tfc"], members_te["tfc"] = cv_preds.cv_predict(fp, texts, y, te["text"], folds, K)[:2]
@@ -150,7 +162,7 @@ def main():
             members_oof, members_te = {}, {}
 
     if gpu_ok:
-        weights = WEIGHTS
+        weights = WEIGHTS if args.members == "v3" else CTR_CPU_WEIGHTS
     else:
         cw_args = argparse.Namespace(feats="char+word", model="lr", C=30.0, transductive=False)
         fp = train_tfidf.make_fit_predict(cw_args, tr["prompt_id"].to_numpy())
@@ -159,20 +171,24 @@ def main():
         weights = V1_WEIGHTS
     oof = blend(members_oof, weights)
     P = blend(members_te, weights)
-    log(f"in-kernel OOF BA of the blend ({'v3 centered GPU' if gpu_ok else 'v1 CPU fallback'}): "
-        f"{metrics.balanced_accuracy(y, oof):.4f} (local nested CV {'0.5931' if gpu_ok else '0.3923'})", t0)
+    ref = {"v3": "0.5931", "ctr-cpu": "0.4675"}[args.members] if gpu_ok else "0.3923"
+    log(f"in-kernel OOF BA of the blend ({args.members if gpu_ok else 'v1 CPU fallback'}): "
+        f"{metrics.balanced_accuracy(y, oof):.4f} (local nested CV {ref})", t0)
     try:  # diagnostic only
-        om = match(oof, cluster_prompts(texts.tolist(), MATCH_THRESHOLD), MATCH_LAMBDA)
-        log(f"in-kernel OOF BA after clustering + matching (lambda {MATCH_LAMBDA}): "
+        om = match(oof, cluster_prompts(texts.tolist(), MATCH_THRESHOLD), args.match_lambda)
+        log(f"in-kernel OOF BA after clustering + matching (lambda {args.match_lambda:g}): "
             f"{metrics.balanced_accuracy(y, np.eye(K)[om]):.4f} (full-structure upper bound; test-like drop "
             f"simulations: EXPERIMENTS.md match_* rows)", t0)
     except Exception as e:
         print(f"OOF matching diagnostic failed: {type(e).__name__}: {e}", flush=True)
 
-    if n_te >= MATCH_MIN_ROWS:
+    if args.match_lambda <= 0:
+        pred = P.argmax(1)
+        print("match lambda 0: plain argmax (matching skipped)", flush=True)
+    elif n_te >= MATCH_MIN_ROWS:
         try:
             groups = cluster_prompts(te["text"].tolist(), MATCH_THRESHOLD)
-            pred = match(P, groups, MATCH_LAMBDA)
+            pred = match(P, groups, args.match_lambda)
             sizes = np.bincount(groups)
             log(f"test clusters {len(sizes)} for {n_te} texts (median {np.median(sizes):.0f}, max {sizes.max()}, "
                 f"singletons {(sizes == 1).sum()}); labels changed by matching {(pred != P.argmax(1)).mean():.3f}", t0)

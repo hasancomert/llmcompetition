@@ -52,7 +52,7 @@ def code_files() -> dict[str, Path]:
 GPU_MODELS = [f"qwen-lm/qwen-3/transformers/{h}/1" for h in ("0.6b-base", "1.7b-base", "4b-base", "8b-base")]
 
 
-def build(gpu: bool = False) -> Path:
+def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: list | None = None) -> Path:
     files = code_files()
     payload = {rel: base64.b64encode(p.read_bytes()).decode() for rel, p in files.items()}
     sha = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
@@ -61,8 +61,8 @@ def build(gpu: bool = False) -> Path:
     dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "src", "reuse"], capture_output=True,
                            text=True).stdout.strip()
     git += "+dirty" if dirty else ""
-    pipeline = "submission_pipeline_gpu.py" if gpu else "submission_pipeline.py"
-    extra = ["--work", "/tmp/nllm_work"] if gpu else []
+    pipeline = pipeline or ("submission_pipeline_gpu.py" if gpu else "submission_pipeline.py")
+    extra = (["--work", "/tmp/nllm_work"] if gpu else []) + list(extra_args or [])
     src = (CELL.replace("__FILES__", repr(payload)).replace("__CODE_SHA__", repr(sha)).replace("__GIT__", repr(git))
            .replace("__PIPELINE__", repr(pipeline)).replace("__EXTRA_ARGS__", repr(extra)))
     nb = {"cells": [{"cell_type": "code", "id": "nllm-submit-main", "execution_count": None, "metadata": {}, "outputs": [],
@@ -70,7 +70,7 @@ def build(gpu: bool = False) -> Path:
           "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                        "language_info": {"name": "python"}},
           "nbformat": 4, "nbformat_minor": 5}
-    slug = SLUG + ("-gpu" if gpu else "")
+    slug = slug or SLUG + ("-gpu" if gpu else "")
     d = ROOT / "outputs" / "kaggle_build" / slug
     d.mkdir(parents=True, exist_ok=True)
     (d / "submission.ipynb").write_text(json.dumps(nb), encoding="utf-8")
@@ -89,8 +89,11 @@ def build(gpu: bool = False) -> Path:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--push", action="store_true")
-    ap.add_argument("--gpu", action="store_true", help="v2 GPU notebook (submission_pipeline_gpu.py)")
+    ap.add_argument("--gpu", action="store_true", help="GPU notebook (submission_pipeline_gpu.py, Qwen3 models attached)")
+    ap.add_argument("--slug", default="", help="kernel slug (default nllm-submit / nllm-submit-gpu)")
+    ap.add_argument("--pipeline", default="", help="src/ script to run (default by --gpu)")
+    ap.add_argument("--extra", default="", help="extra pipeline arguments, space-separated (ablations)")
     a = ap.parse_args()
-    d = build(a.gpu)
+    d = build(a.gpu, a.slug, a.pipeline, a.extra.split())
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)

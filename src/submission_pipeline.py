@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--tokenizers-flat", required=True)
     ap.add_argument("--out", default="submission.parquet")
     ap.add_argument("--fake-test", type=int, default=0, help="LOCAL TIMING ONLY: use N train texts as the test")
+    ap.add_argument("--no-match", action="store_true", help="ablation: plain argmax, no clustering/matching")
     args = ap.parse_args()
     t0 = time.time()
     tok_dir = materialize_tokenizers(Path(args.tokenizers_flat), Path("/tmp/nllm_tokenizers"))
@@ -116,7 +117,10 @@ def main():
     except Exception as e:
         print(f"OOF matching diagnostic failed: {type(e).__name__}: {e}", flush=True)
 
-    if n_te >= MATCH_MIN_ROWS:
+    if args.no_match:
+        pred = P.argmax(1)
+        print("--no-match: plain argmax (clustering/matching skipped)", flush=True)
+    elif n_te >= MATCH_MIN_ROWS:
         try:
             groups = cluster_prompts(te["text"].tolist(), MATCH_THRESHOLD)
             pred = match(P, groups, MATCH_LAMBDA)
