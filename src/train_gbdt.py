@@ -5,6 +5,10 @@ StratifiedGroupKFold(4) by prompt_id picks the number of rounds (mean best itera
 refitted on the whole outer training fold with that many rounds and predicts the validation fold and the test.
 Features have no fitted state (pure functions of one text), so they are computed once for all rows.
 
+External training rows (extdata.py, off by default; --model lr only): --ext ntl_short --ext-weight W adds the
+external corpus rows to every training fold (scaler / quantile transform fitted with them, LR loss weight W); the
+validation rows stay official. Rows topic-matched to a validated prompt_id are left out of that fold.
+
 Examples:
   python train_gbdt.py --feats style
   python train_gbdt.py --feats style+tok
@@ -21,7 +25,9 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold
 
-from common import K, OUT, encode_y, load_folds, load_test, load_train, run_member
+from common import K, OUT, encode_y, load_folds, load_member, load_test, load_train, run_member
+from compare import fmt, paired_bootstrap
+import extdata
 from style_features import style_frame
 from tokenizer_features import TOKENIZER_DIR, tokenizer_frame
 
@@ -45,12 +51,13 @@ def feature_key(texts: pd.Series) -> str:
 
 def features(kind: str, texts: pd.Series, split: str) -> pd.DataFrame:
     path = FEAT_DIR / f"{kind}_{split}_{feature_key(texts)}.parquet"
-    if split == "train" and path.exists():
+    cache = split == "train" or len(texts) >= 5000          # large external sets are cached too (key = the texts)
+    if cache and path.exists():
         F = pd.read_parquet(path)
         assert len(F) == len(texts)
         return F
     F = style_frame(texts) if kind == "style" else tokenizer_frame(texts)
-    if split == "train":
+    if cache:
         FEAT_DIR.mkdir(parents=True, exist_ok=True)
         F.to_parquet(path)
     return F
@@ -79,14 +86,15 @@ def fit_fold(X_tr, y_tr, g_tr, X_apply, params, seed, max_rounds=3000):
     return [b.predict(X) for X in X_apply], rounds, b
 
 
-def fit_fold_lr(X_tr, y_tr, X_apply, C):
-    """Linear family for the same features: scaler + multinomial LR fitted on the training fold only."""
+def fit_fold_lr(X_tr, y_tr, X_apply, C, sw=None):
+    """Linear family for the same features: scaler + multinomial LR fitted on the training fold only
+    (sw: optional sample weights, e.g. external rows)."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import QuantileTransformer, StandardScaler
     m = make_pipeline(QuantileTransformer(n_quantiles=200, output_distribution="normal", random_state=0),
                       StandardScaler(), LogisticRegression(C=C, max_iter=5000))
-    m.fit(X_tr, y_tr)
+    m.fit(X_tr, y_tr, **({} if sw is None else {"logisticregression__sample_weight": sw}))
     return [m.predict_proba(X) for X in X_apply]
 
 
@@ -97,6 +105,7 @@ def main():
     ap.add_argument("--C", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default=None)
+    extdata.add_args(ap)
     args = ap.parse_args()
     t0 = time.time()
     tr, te = load_train(), load_test()
@@ -104,13 +113,26 @@ def main():
     g = tr["prompt_id"].to_numpy()
     folds = load_folds(tr)
     Xtr, Xte, names = build(args.feats, tr, te)
+    ext = extdata.load(args, tr)
+    if ext is not None:
+        if args.model != "lr":
+            ap.error("--ext: --model lr only")
+        _, Xext, names_e = build(args.feats, tr, ext.df[["ext_id", "text"]].rename(columns={"ext_id": "id"}))
+        assert names_e == names
     oof = np.zeros((len(y), K))
     test = np.zeros((len(Xte), K))
     rounds, gain = [], np.zeros(len(names))
     for k in range(int(folds.max()) + 1):
         trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
         if args.model == "lr":
-            oof[val], p_te = fit_fold_lr(Xtr[trn], y[trn], [Xtr[val], Xte], args.C)
+            if ext is not None:
+                ok = np.flatnonzero(ext.allowed(set(g[val])))
+                X_fit = np.vstack([Xtr[trn], Xext[ok]])
+                y_fit = np.concatenate([y[trn], ext.y[ok]])
+                sw = np.concatenate([np.ones(len(trn)), ext.w[ok]])
+                oof[val], p_te = fit_fold_lr(X_fit, y_fit, [Xtr[val], Xte], args.C, sw)
+            else:
+                oof[val], p_te = fit_fold_lr(Xtr[trn], y[trn], [Xtr[val], Xte], args.C)
             test += p_te / (folds.max() + 1)
             continue
         (p_va, p_te), r, b = fit_fold(Xtr[trn], y[trn], g[trn], [Xtr[val], Xte], PARAMS, args.seed)
@@ -119,9 +141,18 @@ def main():
         gain += b.feature_importance("gain")
         print(f"  fold {k}: rounds {r}", flush=True)
     if args.model == "lr":
-        tag = args.tag or f"lr_{args.feats.replace('+', '_')}_C{args.C:g}"
-        run_member(tag, f"QuantileTransformer + LogReg C={args.C:g} on {args.feats} features ({len(names)} cols)",
-                   oof, test, y, folds, t0, feats=args.feats, n_features=len(names), C=args.C)
+        tag0 = args.tag or f"lr_{args.feats.replace('+', '_')}_C{args.C:g}"
+        tag, note = tag0 + extdata.tag_suffix(args), ""
+        if ext is not None:                   # external-data runs: compare with the same member without them
+            try:
+                note = f"paired vs {tag0}: " + fmt(paired_bootstrap(y, load_member(tag0)[0], oof, g))
+            except FileNotFoundError:
+                note = f"paired vs {tag0}: n/a (reference member absent)"
+            print(note, flush=True)
+        run_member(tag, f"QuantileTransformer + LogReg C={args.C:g} on {args.feats} features ({len(names)} cols)"
+                   + extdata.describe(args), oof, test, y, folds, t0, note=note, feats=args.feats,
+                   n_features=len(names), C=args.C, ext=args.ext,
+                   ext_weight=args.ext_weight if ext is not None else None, ext_rows=len(ext) if ext else 0)
         return
     tag = args.tag or f"lgb_{args.feats.replace('+', '_')}_s{args.seed}"
     top = ", ".join(names[i] for i in np.argsort(-gain)[:8])

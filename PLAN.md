@@ -312,6 +312,63 @@ GPU bütçesi:
 | 4. Ölçekleme | onay bekliyor | uyum zayıf; önce üslup talimatlı ikinci uyum testi önerildi |
 | 5. CV testi | bekliyor | ek veri yalnız eğitim katlarında, ağırlıkla dengelenecek, bayrakla açılacak |
 
+### Kaggle Benchmarks model proxy (16 Ekim: yalnız kontrol, üretim yok)
+
+- **CLI ve kota:**
+  - Kaggle CLI 2.2.4 (`pip install -U kaggle` bunu değiştirmedi; PyPI'deki son sürüm bu). `kaggle benchmarks quota`
+    komutu bu sürümde yok.
+  - Kota SDK'daki salt-okunur uç noktadan doğrulandı (`/api/v1/models/proxy/quota`, `get_model_proxy_quotas`):
+    günlük 10 $ (kullanılan 0), aylık 100 $ (kullanılan 0.013 $; yenilenme 5 Kasım).
+- **Katalog** (`kaggle benchmarks tasks models`, 43 model): 18 etiketten 12'si birebir var.
+
+| etiket | Kaggle slug | liste fiyatı $/M giriş/çıkış (kaynak) |
+|---|---|---|
+| gpt-5.5 | `gpt-5.5-2026-04-23` (GPT-5.5'in tarihli sürümü) | 5 / 30 (üçüncü taraf) |
+| gpt-5.6-luna | `gpt-5.6-luna` | 0.20 / 1.20 (üçüncü taraf) |
+| gpt-5.6-sol | `gpt-5.6-sol` | 4 / 20 kampanya, liste 5 / 30 (üçüncü taraf) |
+| gpt-5.6-terra | `gpt-5.6-terra` | 2 / 12 (üçüncü taraf) |
+| gpt-6-astra | `gpt-6-astra` | 10 / 50 (üçüncü taraf) |
+| gemini-3.1-pro-preview | `gemini-3.1-pro-preview` | 2 / 12 (üçüncü taraf) |
+| gemini-3.6-flash | `gemini-3.6-flash` | bulunamadı |
+| gemini-3.8-flash | `gemini-3.8-flash` | 0.75 / 3.75 (tek kaynak) |
+| claude-opus-4-6 | `claude-opus-4-6-default` | 5 / 25 (Anthropic) |
+| claude-opus-4-8 | `claude-opus-4-8-default` | 5 / 25 (Anthropic) |
+| claude-opus-5 | `claude-opus-5-default` | 5 / 25 (Anthropic) |
+| claude-sonnet-5 | `claude-sonnet-5-default` | 2 / 10 (Anthropic) |
+
+- **Katalogda olmayanlar:**
+  - gemini-3.7-flash, claude-fable-5 ve qwen3.8-max.
+  - glm-5.3, glm-5.3-flash ve kimi-k3 de yok; bu üçü Featherless'ta var.
+  - Aynı ailenin başka sürümleri (glm-5, qwen3-235b, gpt-6-sol, claude-opus-4-7, gemini-3.5-flash-lite vb.) sayılmadı.
+- **Maliyet:** katalogda fiyat alanı yok. Proxy her çağrının maliyetini `usage.cost` (nanodolar) içinde döndürüyor;
+  gerçek fiyat ilk küçük koşuda ölçülür.
+- **Plan (onay bekliyor; hiçbir şey çalıştırılmadı):**
+  1. **Prompt dataset'i:** private bir Kaggle dataset'i.
+     - Uyum testi için 30 geri kurulmuş train prompt'u ve hedef kelime sayıları. Yarışmadan türediği için yalnız private.
+     - Ölçekleme gerekirse train prompt'larını kopyalamayan yeni prompt'lar.
+  2. **Task kodu:** `kaggle_benchmarks` ile tek bir task.
+     - Her satır için `llm.prompt(prompt + uzunluk talimatı)` çağrılıyor.
+     - Metin, token ve maliyet run dosyasına yazılıyor.
+     - `evaluate(..., n_jobs=2)` kullanılıyor.
+  3. **Çalıştırma:** yalnız Kaggle altyapısında; yerel proxy token'ı ile toplu üretim yok.
+     - `kaggle benchmarks tasks push nllm-gen -f kaggle/bench_gen_task.py -d <private prompts>`
+     - `kaggle benchmarks tasks run nllm-gen -m <slug> --wait`: model model, her model arasında kota kontrolü.
+     - `kaggle benchmarks tasks download nllm-gen -o data/external/kaggle_bench/`
+     - Task asla `publish` edilmez.
+  4. **Bütçe:**
+     - Tahmin: ortalama uzunlukta (115 kelime ≈ 155 token, giriş ≈ 120 token) cevap başına 0.0002 $ (gpt-5.6-luna) ile
+       0.009 $ (gpt-6-astra) arası. Varsayılan düşünme ~500 token eklerse 0.0008–0.034 $.
+     - Fiyatı bilinen 11 modelin her birinden bir cevap: düşünmesiz 0.038 $, düşünmeli 0.145 $. Günlük 10 $ ile
+       ≈260 ya da ≈70 prompt (≈2.900 ya da ≈760 cevap).
+     - Uyum testi: 30 prompt × 12 model ≈ 360 cevap. Tahmin 1.2–4.4 $, tavan 5 $.
+     - Model başına cevap maliyeti tahminin 2 katını geçerse durulur.
+     - Günlük kota 10 $ zaten sert sınır.
+  5. **Değerlendirme:** Featherless adım 3 ile aynı.
+     - Fold-safe sınıflandırma (`fx_predict.py`) ve stil karşılaştırması (`fx_style.py`).
+     - Ölçekleme yalnız üretilen metinler gerçek metinlere yakın oranda tanınırsa yapılır.
+  6. **Veri kuralları:** çıktılar `data/external/` altında kalır ve her satır kaynak bilgisi taşır. Dış veri kuralı
+     netleşene kadar bu veriyle eğitilen model final submission'a girmez.
+
 ## 6. Çalışma kuralları (kullanıcıdan)
 
 - Kararlar CV'ye göre; her deney `EXPERIMENTS.md`'de (no, değişiklik, CV BA, CV log loss, varsa public LB). İşe yaramayanlar da yazılır.

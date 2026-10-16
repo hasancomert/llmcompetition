@@ -18,6 +18,36 @@ Dış derlem notları (16 Ekim):
 - Dosyalar `data/external/` altında; `data/` git'e girmez.
 
 
+### Dış derlemin ikinci değerlendirmesi (16 Ekim, dal `featherless-extra-data`)
+
+Kullanıcının adımlarıyla yeniden değerlendirildi. Yalnız `external_short_wide.parquet` kullanıldı; `external_all_wide` ile
+birleştirilmedi, `quarantine_luna_*` dışarıda. Kod: `src/ext_corpus.py` (yükleme, temizlik, lisans sınıfı, profil),
+`src/ext_leak.py` (sızıntı), `src/ext_transfer.py` (transfer), `src/extdata.py` (bayrak), `src/ext_blend.py` (CV).
+Çıktılar `data/external/ntl_corpus/` altında (git'e girmez).
+
+- **Sayılar:** 24.025 hücre. Temizlik, 40–250 kelime süzgeci ve tekilleştirmeden sonra 23.658 satır kaldı.
+  - Zayıf sınıflar: gemini-3.6-flash 83, gemini-3.7-flash 77, gemini-3.8-flash 71, glm-5.3 603, gpt-6-astra 722,
+    qwen3.8-max 799, claude-opus-5 818.
+  - En kalabalık sınıflar: claude-opus-4-6 4.767, gpt-5.6-sol 3.246, gpt-5.6-luna 2.259.
+- **Uzunluk:** dış veride medyan 155 kelime (q05–q95: 49–238), resmi train'de 101 kelime (44–224).
+- **Biçim:** dış metinlerin ancak %0–10'u ham haliyle tek düz paragraf (Gemini flash'larda %30–54).
+- **Lisans sınıfları** (kaynak kataloğuna göre; derlem hiçbir şeyi yeniden lisanslamıyor):
+  - açık (Apache-2.0 / MIT / CC-BY-4.0): 3.654 satır.
+  - açık depo lisansı ama çıktılar sağlayıcı şartlarına tabi: 10.525 satır (speechmap, petergpt, woog, novigens,
+    periospot).
+  - **lisansı bilinmeyen ya da belirsiz: 9.479 satır.** Bunlar: eqbench4 7.221, glm_flash_analysis 832,
+    Crownelius 1.096 (üst kaynak lisansı belirsiz), artificialanalysis 169, PawanKrd 105, copilot_model_value_benchmark
+    51, eqbench longform 5.
+  - Kısa görünümde kısıtlayıcı lisanslı (ör. GPL) kaynak yok. RISE (yalnız yazılım GPL-3.0) ve Postman APIFlow
+    (çıktı kullanımı koşullu) yalnız tam görünümde var.
+- **Sızıntı (konu benzerliği):** resmi cevaplarla kalibre edilen kapsayıcı eşik 0.162 (aynı soruya verilen resmi
+  cevapların %99'u bu eşiği geçiyor).
+  - 37 dış prompt grubunun 51 satırı ~20 resmi prompt_id ile eşleşti. Eşleşmelerin çoğu angrygiraffe (Monty Hall,
+    Gödel, Fermi paradoksu, entropi gibi aynı konular); geri kalanı woog, Crownelius ve speechmap.
+  - Bu satırlar, eşleştikleri prompt_id doğrulamadayken o fold'un eğitiminden çıkarılıyor.
+  - Dış verinin geneli resmi konulardan uzak: en iyi benzerliğin medyanı 0.03.
+
+
 Tokenizer dosyaları veri değil, ön-eğitimli varlık sayılır; kaynakları ve lisansları `MODELS_LICENSES.md`'de.
 
 ## Featherless ile üretilen etiketli metinler (dal `featherless-extra-data`; 16 Ekim)
