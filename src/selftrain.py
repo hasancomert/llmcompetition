@@ -257,10 +257,13 @@ def main():
     ap.add_argument("--scratch", action="store_true", help="write outputs/aug_scratch/<tag>.npz (oof) per config")
     ap.add_argument("--log", action="store_true", help="one EXPERIMENTS.md row per config (not saved)")
     ap.add_argument("--save", default=None, help="save the FIRST config as member TAG (test = load_test() as U)")
+    ap.add_argument("--dry-save", action="store_true",
+                    help="run the submission-time test path (load_test() texts as U) for the first config and "
+                         "print its statistics, without saving anything")
     ap.add_argument("--note", default="")
     a = ap.parse_args()
     if a.oracle_prompt_split:
-        assert not a.save and all(c >= 2 for c in a.crossfit), "diagnostic only, needs --crossfit >= 2"
+        assert not a.save and not a.dry_save and all(c >= 2 for c in a.crossfit), "diagnostic only, needs --crossfit >= 2"
     if a.C is None:
         a.C = 0.001 if a.member == "emb8" else 100.0
     t0 = time.time()
@@ -276,10 +279,10 @@ def main():
     gdiag = groups if a.oracle_prompt_split else None
     if a.n_jobs > 1:
         from joblib import Parallel, delayed
-        outs = Parallel(n_jobs=a.n_jobs)(delayed(fold_job)(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save), n_tr, n_te, gdiag)
+        outs = Parallel(n_jobs=a.n_jobs)(delayed(fold_job)(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save or a.dry_save), n_tr, n_te, gdiag)
                                          for k in range(n_f))
     else:
-        outs = [fold_job(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save), n_tr, n_te, gdiag) for k in range(n_f)]
+        outs = [fold_job(be, k, y, folds, keeps, cfgs, a.seed, bool(a.save or a.dry_save), n_tr, n_te, gdiag) for k in range(n_f)]
     print(f"folds done {time.time() - t0:.0f}s; temps {[round(o['T'], 3) for o in outs]}", flush=True)
 
     P0 = np.zeros((n_tr, K))
@@ -350,6 +353,13 @@ def main():
             np.savez(SCRATCH / f"{name}.npz", oof=P1, test=np.zeros((n_te, K)), ba=s1["ba"], logloss=s1["logloss"])
             np.savez(SCRATCH / f"st_{base}_stage0.npz", oof=P0, test=np.zeros((n_te, K)), ba=s0["ba"],
                      logloss=s0["logloss"])
+        if a.dry_save and ci == 0:
+            P0t = np.mean([o["res"][0]["test"][0] for o in outs], 0)
+            P1t = np.mean([o["res"][0]["test"][1] for o in outs], 0)
+            print(f"  dry-save test path: {n_te} test texts, test pseudo rows/fold "
+                  f"{[o['res'][0]['test'][2] for o in outs]}, max|P1-P0| {np.abs(P1t - P0t).max():.3e}, "
+                  f"argmax changed on {int((P1t.argmax(1) != P0t.argmax(1)).sum())} texts, "
+                  f"rows sum to 1: {np.allclose(P1t.sum(1), 1)}", flush=True)
         if a.save and ci == 0:
             test = np.mean([o["res"][0]["test"][1] for o in outs], 0)
             n_pt = [o["res"][0]["test"][2] for o in outs]
