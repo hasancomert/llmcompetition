@@ -294,7 +294,7 @@ def main():
     ref_tag = NG_REF if a.member == "ng" else f"emb_{a.emb_name}_C{a.C:g}"
     try:
         ref_saved = load_member(ref_tag)[0]
-        ref_note = f"stage 0 vs saved {ref_tag}: max|dP| {np.abs(ref_saved - P0).max():.1e}, " \
+        ref_note = f"stage 0 vs saved {ref_tag}: max abs dP {np.abs(ref_saved - P0).max():.1e}, " \
                    f"BA {metrics.balanced_accuracy(y, ref_saved):.4f}"
     except FileNotFoundError:
         pass
@@ -337,14 +337,14 @@ def main():
             print(f"  skewed: mean diff {np.mean(sk_d):+.4f} (per sim {np.round(sk_d, 4).tolist()})\n    " +
                   "\n    ".join(sk_txt), flush=True)
         desc = (f"self-training ({a.member}: {base}; held-out fold = unlabeled set of independent texts): select "
-                f"{'top ' + format(cfg['q'], 'g') + ' per predicted class' if cfg['sel'] == 'frac' else format(cfg['q'], 'g') + '*|U|/K rows per predicted class'}"
+                f"{'top ' + format(cfg['q'], 'g') + ' per predicted class' if cfg['sel'] == 'frac' else format(cfg['q'], 'g') + '*n_U/K rows per predicted class'}"
                 f"{', thr ' + format(cfg['thr'], 'g') if cfg['thr'] is not None else ''}, {cfg['labels']} pseudo labels "
                 f"weight {cfg['w']:g}, crossfit {cfg['crossfit']}"
                 f"{' split by TRUE held-out prompt (DIAGNOSTIC, not deployable)' if a.oracle_prompt_split else ' (random per-text split)' if cfg['crossfit'] >= 2 else ''}"
                 f", rounds {cfg['rounds']} (selftrain.py)")
         note = (f"balanced paired vs stage 0 ({base} recomputed, BA {s0['ba']:.4f} ll {s0['logloss']:.4f}): {fmt(cmp_b)}; "
                 f"per fold {per_fold}; pseudo rows/fold {nsel}, pseudo-label acc {np.round(pacc, 3).tolist()}; "
-                + (f"skewed U(0.2,1) x{a.skew}: mean diff {np.mean(sk_d):+.4f}: " + " | ".join(sk_txt) if a.skew else "")
+                + (f"skewed U(0.2,1) x{a.skew}: mean diff {np.mean(sk_d):+.4f}: " + " // ".join(sk_txt) if a.skew else "")
                 + (f"; {ref_note}" if ref_note else ""))
         if a.note:
             note = a.note + "; " + note
