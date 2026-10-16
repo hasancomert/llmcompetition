@@ -227,30 +227,41 @@ dışarıda. Profil, lisans ve sızıntı ayrıntıları `EXTERNAL_DATA.md`'de; 
 | ng_fw 0.3674 / 1.892 | sürüyor | 0.2878 / 2.097 (−0.080 [−0.099, −0.062]) | 0.2808 / 2.121 (−0.087 [−0.106, −0.068]) | sürüyor |
 | stil2 0.3382 / 1.917 | 0.3119 / 1.968 (−0.026 [−0.040, −0.013]) | 0.2682 / 2.131 (−0.070 [−0.088, −0.051]) | 0.2315 / 2.293 (−0.107 [−0.124, −0.089]) | 0.3030 / 2.041 (−0.035 [−0.051, −0.019]) |
 | stil+tok LR 0.2993 / 2.028 | – | 0.2241 / 2.251 (−0.075 [−0.093, −0.057]) | 0.1804 / 2.515 (−0.119 [−0.140, −0.099]) | – |
-| SVC char | – | sürüyor | iptal (süre) | – |
-| ng_fwsh | – | sürüyor | iptal (süre) | – |
+| SVC char 0.3249 / 2.061 | – | 0.2722 / 2.278 (−0.053 [−0.071, −0.034]) | iptal (süre) | – |
+| ng_fwsh 0.3674 / 1.816 | – | 0.3219 / 1.982 (−0.046 [−0.064, −0.028]) | iptal (süre) | – |
 
 - Hücrelerde BA / log loss (eşli fark, %95 GA).
 - "Temiz alt küme": yalnız açık lisanslı kaynaklar, glm/kimi/qwen satırları hariç (11.395 satır).
+- SVC ve ng_fwsh'ın w=1.0 koşuları iptal edildi. En yavaş iki koşuydu (SVC ~80 dk), ve w=1.0 diğer üç üyede w=0.3'ten
+  hep daha kötüydü.
 
-**Blend: cpu2 ile aynı iç içe hill-climb; sınıf başı bias da iç içe (`ext_blend.py`).**
-- Ara sonuç: 5 üyenin 3'ü dış veriyle. SVC ve ng_fwsh baseline sürümleriyle duruyor.
+**Blend: cpu2 ile aynı iç içe hill-climb; sınıf başı bias da iç içe (`ext_blend.py`; satırlar 496–501).**
+- w=0.3: 5 üyenin hepsi dış veriyle. w=1.0: 5 üyenin 3'ü dış veriyle; SVC ve ng_fwsh baseline sürümleriyle duruyor.
+- charword (cpu2'de ağırlığı 0) dış veriyle hiç koşulmadı ve her varyantta aday olarak kaldı.
 
-| varyant | BA | eşli fark | BA, bias ile | log loss |
-|---|---|---|---|---|
-| baseline (cpu2) | 0.4038 | – | 0.3960 | 1.717 |
-| dış veriyle eğitilmiş üyeler, w=0.3 | 0.3897 | −0.014 [−0.026, −0.003] | 0.3811 | 1.756 |
-| + analitik öncül düzeltmesi, w=0.3 | 0.3915 | −0.012 [−0.024, −0.001] | 0.3778 | 1.765 |
-| dış veriyle eğitilmiş üyeler, w=1.0 | 0.3915 | −0.012 [−0.024, −0.001] | 0.3785 | 1.757 |
-| birleşik (eski + dış veriyle eğitilmiş üyeler aday), w=0.3 | 0.4075 | +0.004 [−0.004, +0.012] | 0.4012 | 1.714 |
+| varyant | BA | eşli fark | BA, bias ile | eşli fark, bias ile | log loss |
+|---|---|---|---|---|---|
+| baseline (cpu2) | 0.4038 | – | 0.3960 | – | 1.717 |
+| dış veriyle eğitilmiş üyeler, w=0.3 | 0.3604 | −0.043 [−0.060, −0.027] | 0.3567 | −0.039 [−0.056, −0.024] | 1.896 |
+| + analitik öncül düzeltmesi, w=0.3 | 0.3500 | −0.054 [−0.070, −0.037] | 0.3515 | −0.044 [−0.059, −0.030] | 1.926 |
+| birleşik (eski + dış veriyle eğitilmiş üyeler aday), w=0.3 | 0.4023 | −0.002 [−0.010, +0.007] | 0.4034 | +0.007 [−0.003, +0.018] | 1.713 |
+| dış veriyle eğitilmiş üyeler, w=1.0 (3/5) | 0.3915 | −0.012 [−0.024, −0.001] | 0.3785 | −0.017 [−0.030, −0.005] | 1.757 |
+| birleşik, w=1.0 (3/5) | 0.4060 | +0.002 [−0.004, +0.009] | 0.3993 | +0.003 [−0.006, +0.013] | 1.716 |
 
-- Sınıf başı bias düzeltmesi her varyantta BA'yı 0.008–0.018 düşürüyor.
-- Sınıf başına recall değişimi (w=0.3, bias ile):
-  - Düşenler: gpt-5.6-luna −0.15, claude-sonnet-5 −0.07, claude-fable-5 −0.07, glm-5.3 −0.06, gpt-5.5 −0.06.
-  - Artanlar: glm-5.3-flash +0.07, claude-opus-4-8 +0.05, gpt-5.6-terra +0.05.
-- glm-5.3 ↔ glm-5.3-flash: glm-5.3→flash 18'den 25'e, flash→glm-5.3 37'den 30'a. glm-5.3 recall'u 0.23'ten 0.17'ye.
+- Yalnız dış veriyle eğitilmiş üyelerle blend'in hill-climb'ı charword (0.5) ve dış veriyle eğitilmiş ng_fwsh (0.5)
+  seçiyor.
+- Birleşik varyantta dış veriyle eğitilmiş bir üye çeşitlilik için küçük ağırlık alıyor. Ama fark anlamlı değil;
+  bias'lı en iyi değer (0.4034) bias'sız baseline'ı (0.4038) geçmiyor.
+- Sınıf başına recall değişimi (w=0.3, 5 üye, bias ile):
+  - Düşenler: claude-opus-4-6 −0.22, gpt-5.6-luna −0.22, glm-5.3 −0.16, gemini-3.8-flash −0.11, gpt-5.5 −0.10,
+    gemini-3.1-pro −0.08, qwen3.8-max −0.07.
+  - Artanlar: gpt-5.6-sol +0.09, glm-5.3-flash +0.07, claude-opus-5 +0.05, claude-opus-4-8 +0.04.
+- glm-5.3 ↔ glm-5.3-flash karışıklığı yer değiştiriyor:
+  - glm-5.3→flash 18'den 29'a, flash→glm-5.3 37'den 15'e.
+  - Recall: glm-5.3 0.23'ten 0.07'ye düşüyor, glm-5.3-flash 0.05'ten 0.12'ye çıkıyor.
+  - Dış veri glm-5.3'e yardım etmiyor.
 
-**Değerlendirme (ara):**
+**Değerlendirme:**
 - Dış veri her üyede, her ağırlıkta (0.05–1.0) ve temiz alt kümede bile CV'yi düşürüyor.
 - Blend'de anlamlı kazanç yok.
 - Sebep alan ve üslup farkı (tartışmalı konu denemeleri, reddetmeler, diyaloglar, kod) ve dört etiketin dış
