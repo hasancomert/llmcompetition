@@ -316,6 +316,13 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     sığıyor: 30 − 2.8 ≥ 23.6 + 3. Bu yüzden 00:37'de v4 gönderim notebook'u (`nllm-submit-gpu` v2) ve 12 katmanlı
     gömme (`nllm-gpu-embed-l12` v1) push'landı.
   - LoRA probe2 ilk boşalan slota konacak.
+  - Gerçekleşen GPU süreleri:
+    - `nllm-submit-gpu` v2 (v4): 00:37–01:12, ~0.6 sa.
+    - `nllm-gpu-embed-l12` v1: 00:37–00:56, ~0.3 sa.
+    - `nllm-lora-probe2` v1: 00:56–02:00 arası bitti, ≤1.1 sa.
+    - Toplam ≤2.0 sa.
+  - 12 katmanlı gömmeler CV'de v4'ü geçti (0.4719 vs 0.4619; EXPERIMENTS.md). Sırada v5 gönderim notebook'u var,
+    ~0.7 sa.
 - Uyum testi v2'nin Kaggle tarafı (Benchmarks task'ları) CPU not defterinde çalışıyor; GPU kotası kullanmıyor.
 - Sığmayabilecek iş: LoRA deneme sonucu iyiyse 5 fold'luk tam LoRA koşusu (~2.5 sa) ve onunla yeni gönderim not
   defteri (~1–1.5 sa).
