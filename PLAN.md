@@ -294,6 +294,12 @@ GPU bütçesi:
   - Kullanıcı kararı (17 Ekim): ölçekleme yok. `--ext ft2` bayrağı kapalı kalıyor, kod silinmiyor.
 - 16 Ekim akşamı `nllm-submit-cpu2` gönderildi: CV 0.4038, public LB **0.375**. Sabahki CPU v1 0.362 idi (CV 0.392);
   metin başına kazanç LB'ye taşındı.
+- **17 Ekim durumu:** en iyi gönderim v5, 12 katmanlı gömmeler: CV 0.4719, public LB **0.435**. v4: 0.4619 / 0.422.
+  - Katman 1–18 ham üyeleri ve uzmanları iyileştirdi ama birleştirici BA'sını değil; v5 kaldı.
+  - Birleştirici BA'sı ~0.47'de doymuş görünüyor.
+  - Kalan büyük kaldıraç LoRA. Tek başına zayıf ama tamamlayıcı: 2 fold'da +~0.009.
+    - Kullanıcı kararıyla sonraya bırakıldı.
+    - Kaggle GPU'su S6E10 TabPFN kararına bağlı; o oturum kullanıcının seçimini bekliyor.
 
 ### GPU planı: 17–24 Ekim haftası (kota 30 saat; kullanıcı kararı: öncelik S6E10)
 
