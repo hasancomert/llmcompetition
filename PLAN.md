@@ -329,7 +329,9 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Ama tamamlayıcı (EXPERIMENTS satır 493).
     - 5 fold'luk tam LoRA (kalan 3 fold ~2.1 sa) ve onunla gönderim (~1.3 sa) toplam ~3.4 sa.
     - S6E10 üst sınırla koşarsa (23.6 + 3 sa tampon) NLLM'e ~0.45 sa kalıyor; o durumda sığmaz.
-    - Kullanıcıya soruldu.
+    - Kullanıcı kararı (17 Ekim sabah): LoRA sonraya bırakıldı.
+      - Kullanıcının bilgisayarında eğitim olmayacak; ~8 GB ağırlık indirilemez.
+      - Geliştirme LoRA dışındaki yönlerle sürüyor.
   - 12 katmanlı gömmeler CV'de v4'ü geçti (0.4719 vs 0.4619; EXPERIMENTS.md). Sırada v5 gönderim notebook'u var,
     ~0.7 sa.
 - Uyum testi v2'nin Kaggle tarafı (Benchmarks task'ları) CPU not defterinde çalışıyor; GPU kotası kullanmıyor.
@@ -345,7 +347,9 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   1. Ham GPU harmanı, düz argmax (`--members v2raw --match-lambda 0`); kota açılınca gönderilecek.
   2. 12 katmanlı gömmeler (ham). **Yapıldı (17 Ekim):** iç içe CV 0.4619 → 0.4719. Tarif v5 hazır; yerel replay
      0.4723. Gönderim notebook'u, Kaggle API'sinin 429 sınırı kalkınca push'lanacak.
-  3. Düzgün eğitilmiş LoRA (C). probe2 (4B, 2 fold) Kaggle'da bitti; çıktısı 429 yüzünden henüz indirilemedi.
+  3. Düzgün eğitilmiş LoRA (C).
+     - probe2 (4B, 2 fold) tek başına 0.4085; gömmelerden zayıf ama tamamlayıcı.
+     - Kullanıcı kararıyla sonraya bırakıldı.
   4. Ham üyelerle argmax odaklı harman (E/F).
 
 
