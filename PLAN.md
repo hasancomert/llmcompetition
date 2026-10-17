@@ -305,6 +305,13 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
 | toplam | | ~24.4–26.4 | |
 | tampon (S6E10'un eksik birimleri için bir tekrar turu ~2.9 sa dahil) | | ~3.6–5.6 | |
 
+- **Gerçekleşen (Cmt 17 Ekim gece):**
+  - S6E10 oturumu TabPFN seed-1 çekirdeklerini 00:20'de başlatmadı. Kullanıcıya üç seçenek sundu (hiç koşmamak,
+    hafta içinde koşmak, şimdi koşmak) ve GPU'nun NLLM'e kalmasını önerdi.
+  - 00:36'da GPU'da çalışan oturum yoktu; kota 30 saat. NLLM işleri kısa ve S6E10 sonradan koşsa da kota korumasına
+    sığıyor: 30 − 2.8 ≥ 23.6 + 3. Bu yüzden 00:37'de v4 gönderim notebook'u (`nllm-submit-gpu` v2) ve 12 katmanlı
+    gömme (`nllm-gpu-embed-l12` v1) push'landı.
+  - LoRA probe2 ilk boşalan slota konacak.
 - Uyum testi v2'nin Kaggle tarafı (Benchmarks task'ları) CPU not defterinde çalışıyor; GPU kotası kullanmıyor.
 - Sığmayabilecek iş: LoRA deneme sonucu iyiyse 5 fold'luk tam LoRA koşusu (~2.5 sa) ve onunla yeni gönderim not
   defteri (~1–1.5 sa).
