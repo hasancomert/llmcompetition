@@ -40,6 +40,8 @@ LM_MODELS = [("qwen3_0.6b_base", "0.6b-base"), ("qwen3_1.7b_base", "1.7b-base"),
 LP4_STYLE = "lp_qwen3_0.6b_base+qwen3_1.7b_base+qwen3_4b_base+qwen3_8b_base_style_C0.1"
 L12_FRACS = "0.0833,0.1667,0.25,0.3333,0.4167,0.5,0.5833,0.6667,0.75,0.8333,0.9167,1.0"   # layers 3, 6, .., 36 of 36
 LM_L12 = [("qwen3_4b_base_l12", "4b-base", L12_FRACS), ("qwen3_8b_base_l12", "8b-base", L12_FRACS)]
+E18_FRACS = ",".join(f"{i / 36:.6f}" for i in range(1, 19))                              # layers 1, 2, .., 18 of 36
+LM_E18 = [("qwen3_4b_base_e18", "4b-base", E18_FRACS), ("qwen3_8b_base_e18", "8b-base", E18_FRACS)]
 
 # (env overrides, script, args) — copied from the commands that produced the saved members (meta json / agent logs)
 STEPS = {
@@ -69,6 +71,17 @@ for grp, pre in (("lab", ""), ("super", "sup_")):
 
 STEPS["emb4_l12"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_4b_base_l12", "--C", "0.0003"])
 STEPS["emb8_l12"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_8b_base_l12", "--C", "0.0003"])
+for tag in ("e18",):
+    STEPS[f"emb4_{tag}"] = ({}, "train_emb.py", ["--kind", "emb", "--names", f"qwen3_4b_base_{tag}", "--C", "0.0003"])
+    STEPS[f"emb8_{tag}"] = ({}, "train_emb.py", ["--kind", "emb", "--names", f"qwen3_8b_base_{tag}", "--C", "0.0003"])
+    for m in ("8", "4"):
+        STEPS[f"spec_super_e{m}_{tag}"] = ({"FAMSPEC_GROUPS": "super"}, "family_spec.py",
+                                          ["--view", f"emb:qwen3_{m}b_base_{tag}", "--Cs", "0.0003"])
+    STEPS[f"famc_super_{tag}"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+        "--specs", f"sup_emb_qwen3_8b_base_{tag}_C0.0003", f"sup_emb_qwen3_4b_base_{tag}_C0.0003", "sup_lpstyle_C0.03",
+        "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
+        "--base", "tfidf_charword_lr_C30", "tfidf_char_svc_C0.3", LP4_STYLE, f"emb_qwen3_4b_base_{tag}_C0.0003",
+        f"emb_qwen3_8b_base_{tag}_C0.0003", "--save", f"famcsup6_{tag}"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "--specs", "sup_emb_qwen3_8b_base_l12_C0.0003", "sup_emb_qwen3_4b_base_l12_C0.0003", "sup_lpstyle_C0.03",
     "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",

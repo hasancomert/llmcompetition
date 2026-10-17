@@ -204,6 +204,33 @@ Kaggle T4, ~0.3 GPU-saat). Eskiden 4 katman vardı (9, 18, 27, 36). Özellikler 
   - Süper aile birleştiricisinin tabanına cpu2'nin diğer üyelerini (ng_fwsh, style2, style_lr) eklemek zararlı:
     0.4719 → 0.4626 (`famcsup6_l12_x4`).
 
+**Erken katmanların hepsi (1–18; `nllm-gpu-embed-e18`, ~0.27 GPU-saat):**
+
+| | 8B | 4B |
+|---|---|---|
+| ham üye, 12 katman (C=0.0003) | 0.4175 / 1.694 | 0.4156 / 1.714 |
+| ham üye, katman 1–18 | **0.4304 / 1.687** | **0.4208 / 1.700** |
+| katman 1–18 + 12 katmanın son altısı (21–36) | 0.4286 / 1.688 | 0.4223 / 1.691 |
+| süper aile uzmanı, 12 katman (aile içi BA / NLL) | 0.4651 / 1.391 | 0.4636 / 1.395 |
+| süper aile uzmanı, katman 1–18 | **0.4783 / 1.385** | **0.4767 / 1.391** |
+
+- Ham üyeler ve uzmanlar daha iyi ama birleştiricide kazanç yok.
+
+| süper aile birleştiricisi | BA | log loss |
+|---|---|---|
+| v5: 12 katman (`famcsup6_l12`) | **0.4719** | 1.5436 |
+| katman 1–18, v5 düzeni (`famcsup6_e18`) | 0.4630 | 1.5374 |
+| iki görüş birlikte (`famcsup6_l12e18`) | 0.4678 | 1.5334 |
+| katman 1–18 uzmanları + v4 tabanı (`famcsup6_e18spec_v4base`) | 0.4704 | **1.5209** |
+
+- v5 → `famcsup6_e18`:
+  - BA farkı −0.009 [−0.019, +0.002].
+  - Log loss farkı −0.006 [−0.014, +0.001].
+  - İkisi de anlamlı değil.
+- BA ağırlıklı iç içe blend yalnız v5'i seçiyor.
+- Karar: v5 kalıyor; katman 1–18 ile gönderim yapılmadı. Log loss iyileşiyor ama hedef metrik BA'da kazanç yok.
+- Farklar gürültü düzeyinde. Birleştirici BA'sı ~0.47'de doymuş görünüyor.
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
@@ -722,3 +749,16 @@ Kaggle T4, ~0.3 GPU-saat). Eskiden 4 katman vardı (9, 18, 27, 36). Özellikler 
 | 512 | lsub_qwen3_8b_base_l12_0-2-4_C0.0003 | RAW frozen LM emb qwen3_8b_base_l12 (layers 3+9+15); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.4078 | 0.4078 ± 0.0296 | 1.8107 |  | 74s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4078 (diff +0.0033, 95% CI [-0.0111, +0.0174], P(diff<=0) 0.333); only A right 208, only B right 217; log loss 1.7353 -> 1.8107; src c1a56405f442 |
 | 513 | lsub_qwen3_8b_base_l12_1-3-5_C0.0003 | RAW frozen LM emb qwen3_8b_base_l12 (layers 6+12+18); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.4045 | 0.4045 ± 0.0226 | 1.8286 |  | 65s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4045 (diff -0.0000, 95% CI [-0.0148, +0.0148], P(diff<=0) 0.509); only A right 187, only B right 187; log loss 1.7353 -> 1.8286; src c1a56405f442 |
 | 514 | lsub_qwen3_8b_base_l12_0-1_C0.0003 | RAW frozen LM emb qwen3_8b_base_l12 (layers 3+6); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.3993 | 0.3993 ± 0.0168 | 1.8569 |  | 61s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.3993 (diff -0.0052, 95% CI [-0.0237, +0.0119], P(diff<=0) 0.733); only A right 305, only B right 291; log loss 1.7353 -> 1.8569; src c1a56405f442 |
+| 515 | raw_qwen3_4b_base_e18_C0.0001 | RAW frozen LM emb qwen3_4b_base_e18 (all layers); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0001 | 0.4156 | 0.4156 ± 0.0200 | 1.7696 |  | 120s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4156 (diff +0.0111, 95% CI [-0.0052, +0.0259], P(diff<=0) 0.092); only A right 207, only B right 237; log loss 1.7353 -> 1.7696; src c1a56405f442 |
+| 516 | raw_qwen3_4b_base_e18_C0.0003 | RAW frozen LM emb qwen3_4b_base_e18 (all layers); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.4208 | 0.4208 ± 0.0161 | 1.7003 |  | 121s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4208 (diff +0.0163, 95% CI [+0.0015, +0.0300], P(diff<=0) 0.013); only A right 206, only B right 250; log loss 1.7353 -> 1.7003; src c1a56405f442 |
+| 517 | raw_qwen3_8b_base_e18_C0.0001 | RAW frozen LM emb qwen3_8b_base_e18 (all layers); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0001 | 0.4301 | 0.4300 ± 0.0199 | 1.7114 |  | 173s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4301 (diff +0.0256, 95% CI [+0.0122, +0.0389], P(diff<=0) 0.000); only A right 155, only B right 224; log loss 1.7353 -> 1.7114; src c1a56405f442 |
+| 518 | raw_qwen3_8b_base_e18_C0.0003 | RAW frozen LM emb qwen3_8b_base_e18 (all layers); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.4304 | 0.4304 ± 0.0211 | 1.6866 |  | 174s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4304 (diff +0.0259, 95% CI [+0.0122, +0.0389], P(diff<=0) 0.000); only A right 163, only B right 233; log loss 1.7353 -> 1.6866; src c1a56405f442 |
+| 519 | raw_qwen3_4b_base_e18_l12late_C0.0001 | RAW frozen LM emb qwen3_4b_base_e18 (all layers) + qwen3_4b_base_l12 (layers 21+24+27+30+33+36); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0001 | 0.4200 | 0.4201 ± 0.0199 | 1.7274 |  | 126s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4200 (diff +0.0156, 95% CI [+0.0018, +0.0289], P(diff<=0) 0.015); only A right 168, only B right 210; log loss 1.7353 -> 1.7274; src c1a56405f442 |
+| 520 | raw_qwen3_4b_base_e18_l12late_C0.0003 | RAW frozen LM emb qwen3_4b_base_e18 (all layers) + qwen3_4b_base_l12 (layers 21+24+27+30+33+36); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.4223 | 0.4223 ± 0.0215 | 1.6912 |  | 127s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4223 (diff +0.0178, 95% CI [+0.0041, +0.0315], P(diff<=0) 0.006); only A right 172, only B right 220; log loss 1.7353 -> 1.6912; src c1a56405f442 |
+| 521 | raw_qwen3_8b_base_e18_l12late_C0.0001 | RAW frozen LM emb qwen3_8b_base_e18 (all layers) + qwen3_8b_base_l12 (layers 21+24+27+30+33+36); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0001 | 0.4230 | 0.4230 ± 0.0287 | 1.6837 |  | 129s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4230 (diff +0.0185, 95% CI [+0.0063, +0.0311], P(diff<=0) 0.003); only A right 121, only B right 171; log loss 1.7353 -> 1.6837; src c1a56405f442 |
+| 522 | raw_qwen3_8b_base_e18_l12late_C0.0003 | RAW frozen LM emb qwen3_8b_base_e18 (all layers) + qwen3_8b_base_l12 (layers 21+24+27+30+33+36); one head on the concatenation; StandardScaler (train fold) + LogReg, C=0.0003 | 0.4286 | 0.4286 ± 0.0276 | 1.6879 |  | 130s | paired vs emb_qwen3_8b_base_C0.001: BA 0.4045 -> 0.4286 (diff +0.0241, 95% CI [+0.0115, +0.0363], P(diff<=0) 0.000); only A right 117, only B right 182; log loss 1.7353 -> 1.6879; src c1a56405f442 |
+| 523 | emb_qwen3_4b_base_e18_C0.0003 | frozen LM embeddings (qwen3_4b_base_e18, 46080 cols), LogReg C=0.0003 | 0.4193 | 0.4193 ± 0.0175 | 1.7006 |  | 311s | src c1a56405f442 |
+| 524 | emb_qwen3_8b_base_e18_C0.0003 | frozen LM embeddings (qwen3_8b_base_e18, 73728 cols), LogReg C=0.0003 | 0.4293 | 0.4293 ± 0.0230 | 1.6862 |  | 647s | src 47c4140dae65 |
+| 525 | famcsup6_e18 | family combine (super-families claude+glm/gemini/gpt+kimi+qwen): base tfidf_charword_lr_C30+tfidf_char_svc_C0.3+lp_qwen3_0.6b_base+qwen3_1.7b_base+qwen3_4b_base+qwen3_8b_base_style_C0.1+emb_qwen3_4b_base_e18_C0.0003+emb_qwen3_8b_base_e18_C0.0003+ng_char-word-fw_lr_C100_T; specialists sup_emb_qwen3_8b_base_e18_C0.0003, sup_emb_qwen3_4b_base_e18_C0.0003, sup_lpstyle_C0.03, sup_ng_char+word+fw_C30; per-family | 0.4630 | 0.4630 ± 0.0274 | 1.5374 |  | 2s | paired vs blend_v3_emb_logloss: BA 0.4430 -> 0.4630 (diff +0.0200, 95% CI [+0.0070, +0.0337], P(diff<=0) 0.002); only A right 162, only B right 216; log loss 1.5775 -> 1.5374; vs nested base blend + ng_char-word-fw_lr_C100_T: BA 0.4597 -> 0.4630 (diff +0.0033, 95% CI [-0.0059, +0.0126], P(diff<=0) 0.257); only A right 63, only B right 72; log loss 1.5447 -> 1.5374; src 47c4140dae65 |
+| 526 | famcsup6_l12e18 | family combine (super-families claude+glm/gemini/gpt+kimi+qwen): base tfidf_charword_lr_C30+tfidf_char_svc_C0.3+lp_qwen3_0.6b_base+qwen3_1.7b_base+qwen3_4b_base+qwen3_8b_base_style_C0.1+emb_qwen3_4b_base_l12_C0.0003+emb_qwen3_8b_base_l12_C0.0003+emb_qwen3_4b_base_e18_C0.0003+emb_qwen3_8b_base_e18_C0.0003+ng_char-word-fw_lr_C100_T; specialists sup_emb_qwen3_8b_base_l12_C0.0003, sup_emb_qwen3_4b_base_l12_C0.0003, sup_emb_qwen3_8b_base_e18_C0.0003, sup_emb_qwen3_4b_base_e18_C0.0003, sup_lpstyle_C0.03, sup_ng_char+word+fw_C30; per-family | 0.4678 | 0.4678 ± 0.0188 | 1.5334 |  | 3s | paired vs blend_v3_emb_logloss: BA 0.4430 -> 0.4678 (diff +0.0248, 95% CI [+0.0122, +0.0374], P(diff<=0) 0.000); only A right 145, only B right 212; log loss 1.5775 -> 1.5334; vs nested base blend + ng_char-word-fw_lr_C100_T: BA 0.4597 -> 0.4678 (diff +0.0082, 95% CI [-0.0018, +0.0174], P(diff<=0) 0.050); only A right 72, only B right 94; log loss 1.5447 -> 1.5334; not saved; src 47c4140dae65 |
+| 527 | famcsup6_e18spec_v4base | family combine (super-families claude+glm/gemini/gpt+kimi+qwen): base blend_v3 members+ng_char-word-fw_lr_C100_T; specialists sup_emb_qwen3_8b_base_e18_C0.0003, sup_emb_qwen3_4b_base_e18_C0.0003, sup_lpstyle_C0.03, sup_ng_char+word+fw_C30; per-family | 0.4704 | 0.4704 ± 0.0242 | 1.5209 |  | 2s | paired vs blend_v3_emb_logloss: BA 0.4430 -> 0.4704 (diff +0.0274, 95% CI [+0.0144, +0.0404], P(diff<=0) 0.000); only A right 142, only B right 216; log loss 1.5775 -> 1.5209; vs nested base blend + ng_char-word-fw_lr_C100_T: BA 0.4541 -> 0.4704 (diff +0.0163, 95% CI [+0.0044, +0.0270], P(diff<=0) 0.003); only A right 110, only B right 154; log loss 1.5497 -> 1.5209; not saved; src 47c4140dae65 |
