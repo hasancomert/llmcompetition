@@ -327,7 +327,9 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - `nllm-gpu-embed-l12` v1: 00:37–00:56, ~0.3 sa.
     - `nllm-lora-probe2` v1: 00:56–02:00 arası bitti, ≤1.1 sa.
     - `nllm-submit-gpu` v3 (v5): 03:39–04:45, ~1.1 sa. 12 katmanlı train öznitelikleri notebook'ta çıkarıldı (+~8 dk).
-      Dataset güncellemesi Kaggle'ın 429 sınırı yüzünden yapılamadı.
+      Dataset güncellemesi gece Kaggle'ın 429 sınırı yüzünden yapılamadı. 17 Ekim öğleden sonra yapıldı:
+      `nllm-lmfeats` yeni sürüm, 12 katmanlı 4B/8B train öznitelikleri eklendi. Dataset private kaldı
+      (isPrivate true, anonim erişim 403).
     - Kaggle kotasına göre toplam 2.95 sa (04:46). Kalan 27.05 sa.
     - Gizli test için yeniden koşma kotadan düşmüyor.
     - `nllm-gpu-embed-e18` v1 (8B/4B, katman 1–18): 09:02–09:18, ~0.27 sa. Toplam ~3.2 sa.
