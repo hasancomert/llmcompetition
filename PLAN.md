@@ -320,7 +320,16 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - `nllm-submit-gpu` v2 (v4): 00:37–01:12, ~0.6 sa.
     - `nllm-gpu-embed-l12` v1: 00:37–00:56, ~0.3 sa.
     - `nllm-lora-probe2` v1: 00:56–02:00 arası bitti, ≤1.1 sa.
-    - Toplam ≤2.0 sa.
+    - `nllm-submit-gpu` v3 (v5): 03:39–04:45, ~1.1 sa. 12 katmanlı train öznitelikleri notebook'ta çıkarıldı (+~8 dk).
+      Dataset güncellemesi Kaggle'ın 429 sınırı yüzünden yapılamadı.
+    - Kaggle kotasına göre toplam 2.95 sa (04:46). Kalan 27.05 sa.
+    - Gizli test için yeniden koşma kotadan düşmüyor.
+  - LoRA probe2 sonucu:
+    - Tek başına zayıf: 2 fold'da 0.4085; dondurulmuş 4B gömmeleri 0.4354.
+    - Ama tamamlayıcı (EXPERIMENTS satır 493).
+    - 5 fold'luk tam LoRA (kalan 3 fold ~2.1 sa) ve onunla gönderim (~1.3 sa) toplam ~3.4 sa.
+    - S6E10 üst sınırla koşarsa (23.6 + 3 sa tampon) NLLM'e ~0.45 sa kalıyor; o durumda sığmaz.
+    - Kullanıcıya soruldu.
   - 12 katmanlı gömmeler CV'de v4'ü geçti (0.4719 vs 0.4619; EXPERIMENTS.md). Sırada v5 gönderim notebook'u var,
     ~0.7 sa.
 - Uyum testi v2'nin Kaggle tarafı (Benchmarks task'ları) CPU not defterinde çalışıyor; GPU kotası kullanmıyor.
