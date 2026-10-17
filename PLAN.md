@@ -324,6 +324,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
       Dataset güncellemesi Kaggle'ın 429 sınırı yüzünden yapılamadı.
     - Kaggle kotasına göre toplam 2.95 sa (04:46). Kalan 27.05 sa.
     - Gizli test için yeniden koşma kotadan düşmüyor.
+    - `nllm-gpu-embed-e18` v1 (8B/4B, katman 1–18): 09:02–09:18, ~0.27 sa. Toplam ~3.2 sa.
   - LoRA probe2 sonucu:
     - Tek başına zayıf: 2 fold'da 0.4085; dondurulmuş 4B gömmeleri 0.4354.
     - Ama tamamlayıcı (EXPERIMENTS satır 493).
