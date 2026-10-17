@@ -13,6 +13,7 @@ Nothing here clusters, centers or matches held-out / test texts.
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 
@@ -42,10 +43,12 @@ def raw_matrix(name, tr=None, te=None):
 
 def grams(name, folds, fold, n_test):
     """(L, N, N) float32 Gram matrices of the standardized layer blocks of `name` for one fold (N = train + test
-    rows). Standardization (mean / std, std 0 -> 1, as sklearn) uses the training rows of that fold only."""
-    CACHE.mkdir(parents=True, exist_ok=True)
+    rows). Standardization (mean / std, std 0 -> 1, as sklearn) uses the training rows of that fold only.
+    Cached under outputs/kgram/ unless NLLM_KGRAM_CACHE=0 (replay.py: with the ~4k hidden-test rows a 12-layer stack
+    is ~2.2 GB per fold and LM, too much disk for a one-off use)."""
+    use_cache = os.environ.get("NLLM_KGRAM_CACHE", "1") != "0"
     path = CACHE / f"{name}_f{fold}.npy"
-    if path.exists():
+    if use_cache and path.exists():
         G = np.load(path, mmap_mode="r")
         if G.shape[1] == len(folds) + n_test:
             return G
@@ -60,6 +63,9 @@ def grams(name, folds, fold, n_test):
         sd[sd == 0] = 1.0
         Z = ((B - mu) / sd).astype(np.float32)
         G[li] = Z @ Z.T
+    if not use_cache:
+        return G
+    CACHE.mkdir(parents=True, exist_ok=True)
     np.save(path, G)
     return np.load(path, mmap_mode="r")
 

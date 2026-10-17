@@ -10,6 +10,9 @@ Recipes (CV = nested, EXPERIMENTS.md):
   cpu2  char TF-IDF SVC + style+tok LR + n-gram fw + n-gram fw+shapew + style2 (blend_pt_cpu_logloss, 0.4038)
   v4    blend_v3 members + n-gram fw member, lab and super-family specialists (8B emb, 4B emb, lp+style, n-gram fw),
         two nested family combiners blended 0.533 / 0.467 (blend_pt_gpu_ba, 0.4619)   [needs the 4 Qwen3 LMs]
+  v5    v4's super-family combiner rebuilt on 12-layer embeddings of the 4B / 8B LMs (layers 3..36 step 3): base
+        members with emb_*_l12_C0.0003, specialists sup_emb_*_l12_C0.0003 (blend_pt_gpu_l12_ba, 0.4719; the nested
+        hill-climb gives it all the weight)                                          [4 Qwen3 LMs + 2 12-layer passes]
 
 Usage (notebook): python replay.py --recipe v4 --data-dir D --folds F --tokenizers-flat T --out submission.parquet
                   [--work /tmp/nllm_work --train-lm auto]       (GPU: LM features of the test are extracted here)
@@ -35,6 +38,8 @@ Q4 = "qwen3_0.6b_base,qwen3_1.7b_base,qwen3_4b_base,qwen3_8b_base"
 LM_MODELS = [("qwen3_0.6b_base", "0.6b-base"), ("qwen3_1.7b_base", "1.7b-base"),
              ("qwen3_4b_base", "4b-base"), ("qwen3_8b_base", "8b-base")]
 LP4_STYLE = "lp_qwen3_0.6b_base+qwen3_1.7b_base+qwen3_4b_base+qwen3_8b_base_style_C0.1"
+L12_FRACS = "0.0833,0.1667,0.25,0.3333,0.4167,0.5,0.5833,0.6667,0.75,0.8333,0.9167,1.0"   # layers 3, 6, .., 36 of 36
+LM_L12 = [("qwen3_4b_base_l12", "4b-base", L12_FRACS), ("qwen3_8b_base_l12", "8b-base", L12_FRACS)]
 
 # (env overrides, script, args) — copied from the commands that produced the saved members (meta json / agent logs)
 STEPS = {
@@ -55,10 +60,20 @@ for grp, pre in (("lab", ""), ("super", "sup_")):
     STEPS[f"spec_{grp}_e4"] = (env, "family_spec.py", ["--view", "emb:qwen3_4b_base", "--Cs", "0.001"])
     STEPS[f"spec_{grp}_lps"] = (env, "family_spec.py", ["--view", "lpstyle", "--Cs", "0.03"])
     STEPS[f"spec_{grp}_ng"] = (env, "family_spec.py", ["--view", "ng:char+word+fw", "--Cs", "30"])
+    STEPS[f"spec_{grp}_e8_l12"] = (env, "family_spec.py", ["--view", "emb:qwen3_8b_base_l12", "--Cs", "0.0003"])
+    STEPS[f"spec_{grp}_e4_l12"] = (env, "family_spec.py", ["--view", "emb:qwen3_4b_base_l12", "--Cs", "0.0003"])
     STEPS[f"famc_{grp}"] = (env, "family_combine.py", [
         "--specs", f"{pre}emb_qwen3_8b_base_C0.0003", f"{pre}emb_qwen3_4b_base_C0.001", f"{pre}lpstyle_C0.03",
         f"{pre}ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
         "--save", "famc6_lab_s4q_pf" if grp == "lab" else "famcsup6_s4q_pf"])
+
+STEPS["emb4_l12"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_4b_base_l12", "--C", "0.0003"])
+STEPS["emb8_l12"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_8b_base_l12", "--C", "0.0003"])
+STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+    "--specs", "sup_emb_qwen3_8b_base_l12_C0.0003", "sup_emb_qwen3_4b_base_l12_C0.0003", "sup_lpstyle_C0.03",
+    "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
+    "--base", "tfidf_charword_lr_C30", "tfidf_char_svc_C0.3", LP4_STYLE, "emb_qwen3_4b_base_l12_C0.0003",
+    "emb_qwen3_8b_base_l12_C0.0003", "--save", "famcsup6_l12"])
 
 RECIPES = {
     "cpu2": {"needs_lm": False,
@@ -72,6 +87,11 @@ RECIPES = {
                      "spec_super_e8", "spec_super_e4", "spec_super_lps", "spec_super_ng", "famc_super"],
            "weights": {"famcsup6_s4q_pf": 0.53333, "famc6_lab_s4q_pf": 0.46667},
            "cv": 0.4619},
+    "v5": {"needs_lm": True, "lm_extra": LM_L12,
+           "steps": ["charword", "svc", "lp4", "emb4_l12", "emb8_l12", "ng_fw",
+                     "spec_super_e8_l12", "spec_super_e4_l12", "spec_super_lps", "spec_super_ng", "famc_super_l12"],
+           "weights": {"famcsup6_l12": 1.0},
+           "cv": 0.4719},
 }
 
 
@@ -112,14 +132,16 @@ def setup_project(a, t0):
     return tr, te
 
 
-def setup_lm(a, tr, te, t0):
+def setup_lm(a, tr, te, t0, extra=()):
     """outputs/emb/{emb,lp,meta}_<name>_{train,test}: precomputed (local), or test extracted here (GPU) with the
-    train split taken from the private dataset nllm-lmfeats when it matches train.csv row order."""
+    train split taken from the private dataset nllm-lmfeats when it matches train.csv row order.
+    extra: further (name, model hint, layer fracs) passes, e.g. the 12-layer embeddings of v5."""
     emb = ROOT / "outputs" / "emb"
     emb.mkdir(parents=True, exist_ok=True)
+    models = [(n, h, None) for n, h in LM_MODELS] + list(extra)
     if a.precomputed_lm:
         p = Path(a.precomputed_lm)
-        for name, _ in LM_MODELS:
+        for name, _, _ in models:
             for split in ("train", "test"):
                 for kind, ext in (("emb", "npy"), ("lp", "npy"), ("meta", "json")):
                     link(p / f"{kind}_{name}_{split}.{ext}", emb / f"{kind}_{name}_{split}.{ext}")
@@ -127,7 +149,7 @@ def setup_lm(a, tr, te, t0):
         return
     from submission_pipeline_gpu import find_train_lm, load_split
     train_dir = find_train_lm(a.train_lm)
-    for name, hint in LM_MODELS:
+    for name, hint, fracs in models:
         cfg = [q for q in glob.glob("/kaggle/input/**/config.json", recursive=True) if f"/{hint}/" in q and "qwen" in q]
         if not cfg:
             raise FileNotFoundError(f"model {hint} not attached")
@@ -138,7 +160,7 @@ def setup_lm(a, tr, te, t0):
         texts = ([] if pre is not None else ["--texts", str(ROOT / "data" / "train.csv")]) + \
             ["--texts", str(ROOT / "data" / "test.csv")]
         r = subprocess.run([sys.executable, str(HERE / "gpu_embed.py"), "--model-dir", os.path.dirname(cfg[0]),
-                            "--name", name, *texts, "--out", str(emb)])
+                            "--name", name, *texts, "--out", str(emb)] + (["--layer-fracs", fracs] if fracs else []))
         if r.returncode != 0:
             raise RuntimeError(f"gpu_embed failed for {name} (exit {r.returncode})")
         log(f"LM features {name}: train {'from ' + str(train_dir) if pre is not None else 'extracted'}, test extracted",
@@ -147,7 +169,7 @@ def setup_lm(a, tr, te, t0):
 
 def run_step(key, t0):
     env_over, script, args = STEPS[key]
-    env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), **env_over)
+    env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), NLLM_KGRAM_CACHE="0", **env_over)
     r = subprocess.run([sys.executable, str(HERE / script), *args], cwd=str(HERE), env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     tail = "\n".join(l for l in r.stdout.splitlines() if l.startswith("[") or "Error" in l or "Traceback" in l)[-1500:]
@@ -174,7 +196,7 @@ def main():
     tr, te = setup_project(a, t0)
     try:
         if rec["needs_lm"]:
-            setup_lm(a, tr, te, t0)
+            setup_lm(a, tr, te, t0, rec.get("lm_extra", ()))
         for key in rec["steps"]:
             run_step(key, t0)
         from common import CLASSES, K, encode_y, load_member, metrics
