@@ -334,8 +334,9 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   - Gerçek GPU saatleri bu tabloya işlenir.
 - Yeni yön: metin başına sınıflandırıcıyı iyileştirmek. Sıra:
   1. Ham GPU harmanı, düz argmax (`--members v2raw --match-lambda 0`); kota açılınca gönderilecek.
-  2. 12 katmanlı gömmeler (ham).
-  3. Düzgün eğitilmiş LoRA (C).
+  2. 12 katmanlı gömmeler (ham). **Yapıldı (17 Ekim):** iç içe CV 0.4619 → 0.4719. Tarif v5 hazır; yerel replay
+     0.4723. Gönderim notebook'u, Kaggle API'sinin 429 sınırı kalkınca push'lanacak.
+  3. Düzgün eğitilmiş LoRA (C). probe2 (4B, 2 fold) Kaggle'da bitti; çıktısı 429 yüzünden henüz indirilemedi.
   4. Ham üyelerle argmax odaklı harman (E/F).
 
 
