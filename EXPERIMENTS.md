@@ -132,6 +132,45 @@ sklearn ile yeniden puanlandı, kodu sızıntı açısından okundu ve çoğu bi
 Sonuç: mevcut özelliklerle metin başına sınıflandırıcı ~0.46'da doymuş. Sıradaki kaldıraçlar GPU tarafında: düzgün
 eğitilmiş LoRA (ortalama havuzlama, kesilmiş katmanlar, daha yüksek öğrenme oranı, 4+ epoch) ve 12 katmanlı gömmeler.
 
+## 12 katmanlı gömmeler (17 Ekim gece; satırlar 482–491)
+
+Qwen3 4B ve 8B base'in 36 katmanından 12'si (3, 6, …, 36) ortalama havuzlamayla çıkarıldı (`nllm-gpu-embed-l12`,
+Kaggle T4, ~0.3 GPU-saat). Eskiden 4 katman vardı (9, 18, 27, 36). Özellikler ham: merkezleme ya da eşleştirme yok.
+
+**Ham üyeler** (StandardScaler + LogReg; BA / log loss):
+
+| üye | C=0.0003 | C=0.001 | C=0.003 |
+|---|---|---|---|
+| 4B, 4 katman | 0.3889 / 1.881 | 0.4063 / 1.750 | 0.3956 / 1.802 |
+| 4B, 12 katman | 0.4149 / 1.714 | **0.4156** / 1.743 | 0.4130 / 1.871 |
+| 8B, 4 katman | 0.3978 / 1.799 | 0.4045 / 1.735 | 0.4008 / 1.821 |
+| 8B, 12 katman | 0.4163 / **1.695** | **0.4164** / 1.760 | 0.4138 / 1.894 |
+
+- 4B, C=0.001'de eşli fark: +0.009 [−0.000, +0.019].
+
+**Aile uzmanları** (aile içi ortalama BA / koşullu NLL, lab gruplaması):
+- 8B: 0.5175 / 1.129 (4 katman, C=0.0003) → 0.5300 / 1.097 (12 katman, C=0.0003).
+- 4B: 0.5157 / 1.130 (4 katman, C=0.001) → 0.5272 / 1.100 (12 katman, C=0.0003).
+
+**Birleştiriciler (v4 düzeni):**
+- Taban üyeler: 12 katmanlı emb'ler (C=0.0003).
+- Uzmanlar: 12 katmanlı emb (C=0.0003) + lpstyle + n-gram.
+- `family_combine.py --base` ile kuruldu.
+
+| | v4 (4 katman) | 12 katman | eşli fark |
+|---|---|---|---|
+| süper aile birleştiricisi | 0.4612 | **0.4719** | +0.011 [+0.002, +0.020] |
+| lab birleştiricisi | 0.4615 | 0.4641 | +0.003 [−0.006, +0.012] |
+| iç içe blend (BA ağırlıkları) | 0.4619 | **0.4719** | +0.010 [+0.002, +0.019], P(fark ≤ 0) 0.01 |
+
+- Hill-climb ağırlığın hepsini 12 katmanlı süper aile birleştiricisine veriyor. Log loss biraz kötü: 1.539 → 1.544.
+- C değerleri üye düzeyindeki aynı CV'den seçildi; bu hafif iyimserlik yaratır. Blend'in kendisi iç içe.
+- Yeni tarif v5 (`replay.py`): v4'ün süper aile birleştiricisi, 12 katmanlı girdilerle.
+  - Yerel uçtan uca replay'de OOF BA 0.4723 (iç içe CV 0.4719). Farkı LBFGS'in iş parçacığı sayısına bağlı küçük
+    sayısal farklar yaratıyor.
+- Gizli testte ~4.000 metin var. 12 katmanlık Gram yığını fold ve LM başına ~2.2 GB tutuyor. Bu yüzden replay Gram'ları
+  diske yazmadan bellekte hesaplıyor (`NLLM_KGRAM_CACHE=0`).
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |
