@@ -424,6 +424,10 @@ GPU bütçesi:
     fold'dan çıkarılır.
   - Ağırlıklar 0.3 ve 1.0; cpu2 üyeleri ve iç içe blend (`ext_blend.py`).
   - BA, log loss ve etiket bazında recall raporlanır. Ölçekleme kararını kullanıcı CV'ye göre verir.
+- **Kullanıcı kararı (17 Ekim):** ölçekleme yok (seçenek A; ~2.000 satırlık pilot önerisi alınmadı).
+  - CV'de anlamlı kazanç yoktu; sonuçlar EXPERIMENTS.md'de.
+  - `--ext ft2` bayrağı kapalı kalıyor, kod silinmiyor.
+  - Private Kaggle dataset'i ve task'ı private olarak duruyor.
 
 ## 6. Çalışma kuralları (kullanıcıdan)
 

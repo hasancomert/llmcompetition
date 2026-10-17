@@ -395,6 +395,7 @@ bir kısmıyla (prompt'lar bütün halinde, 2 tohum), tam doğrulama fold'unda.
 - gpt-5.6-terra metinleri luna'yı bozuyor. Ölçeklemede terra dışarıda bırakılmalı ya da kardeş karışıklığı ayrıca
   ölçülmeli.
 - Ölçekleme kararı kullanıcının. Bayrak (`--ext ft2`, varsayılan kapalı) kodda duruyor; hiçbir gönderimde yok.
+- **Kullanıcı kararı (17 Ekim): ölçekleme yok.** Bayrak kapalı kalıyor, kod silinmiyor.
 
 ## Deney tablosu
 

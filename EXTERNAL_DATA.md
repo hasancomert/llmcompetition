@@ -105,7 +105,9 @@ Tokenizer dosyaları veri değil, ön-eğitimli varlık sayılır; kaynakları v
   kapalı) açılacak.
   - Uyum testi v2 (tavan 1 $, harcanan 1,0105 $): `ft2/featherless_<split>.jsonl`. DEV'de T0 satırları v1
     çıktılarından yeniden kullanıldı; EVAL'de T2 × 20 prompt (kimi-k3 tavan yüzünden 5/20).
-  - v2 metinleri CV kontrolünde eğitim satırı olarak denendi (`--ext ft2`, varsayılan kapalı).
+  - v2 metinleri CV kontrolünde eğitim satırı olarak denendi (`--ext ft2`, varsayılan kapalı). CV'de anlamlı kazanç
+    yoktu.
+  - Kullanıcı kararı (17 Ekim): ölçekleme yok, bayrak kapalı kalıyor.
 - **Kurallar açısından not:** prompt kurgulama ve üretim için yarışma train metinlerinden türeyen içerik Featherless'a
   gönderildi (150 prompt × 4 cevap ve kurulan prompt'lar). Yarışma kurallarındaki veri paylaşımı maddesi açısından
   değerlendirilmeli.
