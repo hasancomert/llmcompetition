@@ -31,6 +31,9 @@ GLM = ["emb_glm4_9b_C0.001", "lpx_lp4glm_style2_C0.003_T"]
 FAMC_GLM = ["famcsup6_s5_pf", "famc6_lab_s5_pf"]
 FAMC_Q = ["famcsup6_s4q_pf", "famc6_lab_s4q_pf"]      # same combiners without the GLM-4-9B specialist
 FAMC_CPU = ["famcpu_sup_ng_s", "famcpu_lab_ngs2_pf"]  # CPU-only combiners (family_combine_cpu.py)
+EMB12 = ["emb_qwen3_4b_base_l12_C0.0003", "emb_qwen3_4b_base_l12_C0.001", "emb_qwen3_8b_base_l12_C0.0003",
+         "emb_qwen3_8b_base_l12_C0.001"]                 # 12-layer embeddings (layers 3..36 step 3)
+FAMC_L12 = ["famcsup6_l12", "famc6_lab_l12"]          # the FAMC_Q combiners rebuilt on the 12-layer embeddings
 
 SETS = {
     # (A) GPU notebook: Qwen3 LM features + TF-IDF + style (+ GLM-4-9B variants to test whether it is needed)
@@ -38,6 +41,8 @@ SETS = {
     "gpu_glm": TFIDF + LP + EMBQ + STYLE + NG + RAWCAT + LPX_NOLM + GLM + FAMC_GLM,
     "gpu_noglm": TFIDF + LP + EMBQ + STYLE + NG + RAWCAT + LPX_NOLM + FAMC_Q,
     "gpu_nofamc": TFIDF + LP + EMBQ + STYLE + NG + RAWCAT + LPX_NOLM,
+    "gpu_l12": TFIDF + LP + EMBQ + EMB12 + STYLE + NG + RAWCAT + LPX_NOLM + FAMC_L12,
+    "gpu_l12_all": TFIDF + LP + EMBQ + EMB12 + STYLE + NG + RAWCAT + LPX_NOLM + FAMC_Q + FAMC_L12,
     # (B) CPU only: no LM features at all
     "cpu": TFIDF + STYLE + NG + LPX_NOLM,
     "cpu_famc": TFIDF + STYLE + NG + LPX_NOLM + FAMC_CPU,
