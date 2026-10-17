@@ -288,6 +288,10 @@ GPU bütçesi:
 - Dış derlem (olegzholobov/name-that-llm-response-corpus) CV'de zarar verdi; kullanılmıyor.
   - 16 Ekim'deki ikinci değerlendirme (dal `featherless-extra-data`) de her ayarda zarar verdi.
   - Kullanıcı kararı: bırakıldı. Bayrak kapalı kalıyor, kod silinmiyor.
+- Uyum testi v2 (dal `featherless-extra-data`; Kaggle Benchmarks + Featherless ile üretilmiş metinler):
+  - Eşiği 15 etiketin 10'u geçti.
+  - CV'de anlamlı kazanç yok: blend +0.000 ile +0.006 arası, gürültü içinde; zarar da yok.
+  - Kullanıcı kararı (17 Ekim): ölçekleme yok. `--ext ft2` bayrağı kapalı kalıyor, kod silinmiyor.
 - 16 Ekim akşamı `nllm-submit-cpu2` gönderildi: CV 0.4038, public LB **0.375**. Sabahki CPU v1 0.362 idi (CV 0.392);
   metin başına kazanç LB'ye taşındı.
 
