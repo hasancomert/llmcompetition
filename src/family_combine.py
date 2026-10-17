@@ -15,6 +15,7 @@ biases are the means of the five fold fits. Nothing clusters, centers or matches
 Usage:
   python family_combine.py --specs emb_qwen3_8b_base_C0.001 lpstyle_C0.03 [--per-family] [--offsets 1.0]
                            [--bias] [--extra-members ng_char-word-fw_lr_C100_T] [--log NAME] [--save TAG]
+                           [--base m1 m2 ...]   (replace the blend_v3 base members, e.g. 12-layer embedding members)
 """
 from __future__ import annotations
 
@@ -203,6 +204,7 @@ def main():
     ap.add_argument("--bias", action="store_true", help="nested per-class BA biases on the final probabilities")
     ap.add_argument("--famfirst", action="store_true", help="decision: family by mass, then model inside it")
     ap.add_argument("--extra-members", nargs="*", default=[])
+    ap.add_argument("--base", nargs="*", default=None, help="base members of the blend (default: blend_v3's, BASE)")
     ap.add_argument("--log", default=None)
     ap.add_argument("--save", default=None)
     ap.add_argument("--note", default="")
@@ -210,7 +212,8 @@ def main():
     t0 = time.time()
     tr = load_train()
     y, folds, g = encode_y(tr["model"]), load_folds(tr), tr["prompt_id"].values
-    members = [load_member(t) for t in BASE + a.extra_members]
+    base = a.base if a.base else BASE
+    members = [load_member(t) for t in base + a.extra_members]
     m_oof, m_test = [m[0] for m in members], [m[1] for m in members]
     specs = [load_spec(s) for s in a.specs]
     LS_oof = [lg(s[0]) for s in specs]
@@ -270,13 +273,13 @@ def main():
         print(f"  BA biases (mean of folds): {dict(zip(CLASSES, np.round(np.mean(fold_bias, 0), 2)))}")
     if GROUPING != "lab":
         print(f"  grouping {GROUPING}: {FAMS}")
-    desc = (f"family combine{' (super-families ' + '/'.join(FAMS) + ')' if GROUPING != 'lab' else ''}: base {'+'.join(['blend_v3 members'] + a.extra_members)}"
+    desc = (f"family combine{' (super-families ' + '/'.join(FAMS) + ')' if GROUPING != 'lab' else ''}: base {'+'.join((['blend_v3 members'] if base == BASE else base) + a.extra_members)}"
             f"{'; specialists ' + ', '.join(a.specs) if a.specs else ''}"
             f"{'; per-family' if a.per_family else ''}{f'; offsets L2 {a.offsets:g}' if a.offsets is not None else ''}"
             f"{'; nested BA biases' if a.bias else ''}{'; family-first decision' if a.famfirst else ''}")
     note = f"{a.note}; paired vs {REF}: {cmp}".lstrip("; ")
     if a.save:
-        run_member(a.save, desc, out, Pt, y, folds, t0, note=note, members=BASE + a.extra_members,
+        run_member(a.save, desc, out, Pt, y, folds, t0, note=note, members=base + a.extra_members,
                    specs=a.specs, per_family=a.per_family, offsets=a.offsets, bias=a.bias,
                    blend_weights=[float(v) for v in np.mean(fold_w, 0)])
     elif a.log:
