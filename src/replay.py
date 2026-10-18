@@ -13,6 +13,9 @@ Recipes (CV = nested, EXPERIMENTS.md):
   v5    v4's super-family combiner rebuilt on 12-layer embeddings of the 4B / 8B LMs (layers 3..36 step 3): base
         members with emb_*_l12_C0.0003, specialists sup_emb_*_l12_C0.0003 (blend_pt_gpu_l12_ba, 0.4719; the nested
         hill-climb gives it all the weight)                                          [4 Qwen3 LMs + 2 12-layer passes]
+  v6    v5 + test-time adaptive prompt-centering: centered twins of the 8B / 4B 12-layer views (trained on true-prompt
+        centered training rows) for test texts in topic clusters of 2..18 (cut 0.85), evidence added with weight 0.5
+        per twin (adaptive_twins.py; simulated in adaptive_sim.py: +0.009 at 1-2 texts per prompt, +0.05 at 1-8)
 
 Usage (notebook): python replay.py --recipe v4 --data-dir D --folds F --tokenizers-flat T --out submission.parquet
                   [--work /tmp/nllm_work --train-lm auto]       (GPU: LM features of the test are extracted here)
@@ -82,6 +85,8 @@ for tag in ("e18",):
         "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
         "--base", "tfidf_charword_lr_C30", "tfidf_char_svc_C0.3", LP4_STYLE, f"emb_qwen3_4b_base_{tag}_C0.0003",
         f"emb_qwen3_8b_base_{tag}_C0.0003", "--save", f"famcsup6_{tag}"])
+STEPS["twins_l12"] = ({}, "adaptive_twins.py", ["--views", "qwen3_8b_base_l12,qwen3_4b_base_l12", "--C", "0.001",
+                                                 "--thr", "0.85", "--tag", "twins_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "--specs", "sup_emb_qwen3_8b_base_l12_C0.0003", "sup_emb_qwen3_4b_base_l12_C0.0003", "sup_lpstyle_C0.03",
     "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
@@ -104,6 +109,13 @@ RECIPES = {
            "steps": ["charword", "svc", "lp4", "emb4_l12", "emb8_l12", "ng_fw",
                      "spec_super_e8_l12", "spec_super_e4_l12", "spec_super_lps", "spec_super_ng", "famc_super_l12"],
            "weights": {"famcsup6_l12": 1.0},
+           "cv": 0.4719},
+    "v6": {"needs_lm": True, "lm_extra": LM_L12,
+           "steps": ["charword", "svc", "lp4", "emb4_l12", "emb8_l12", "ng_fw",
+                     "spec_super_e8_l12", "spec_super_e4_l12", "spec_super_lps", "spec_super_ng", "famc_super_l12",
+                     "twins_l12"],
+           "weights": {"famcsup6_l12": 1.0},
+           "twins": {"twins_l12": 0.5},
            "cv": 0.4719},
 }
 
@@ -228,7 +240,13 @@ def main():
         oof_pred, _ = blend(oofs)
         log(f"in-kernel OOF BA of the fixed-weight blend: {metrics.balanced_accuracy(y, np.eye(K)[oof_pred]):.4f} "
             f"(local nested CV {rec['cv']})", t0)
-        pred, _ = blend(tests)
+        pred, z = blend(tests)
+        for tag, wt in rec.get("twins", {}).items():          # test-time adaptive centering (no labels used)
+            tw = np.load(ROOT / "outputs" / "twins" / f"{tag}.npz")
+            z = z + wt * tw["evidence"]
+            pred = z.argmax(1)
+            log(f"twins {tag}: weight {wt} on {int(tw['adapt'].sum())} of {len(z)} test texts; "
+                f"{int((pred != blend(tests)[0]).sum())} predictions changed", t0)
         labels = np.asarray(CLASSES)[pred]
     except Exception as e:
         if a.no_fallback:
