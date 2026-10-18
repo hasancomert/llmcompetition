@@ -303,6 +303,9 @@ ortalama / std'siyle ölçekleniyor (etiket yok). Tek LR üyesi, C=0.0003; tutul
 - Test standardizasyonu üyeleri ve uzmanları iyileştiriyor. Birleştiricide BA'yı tek başına değiştirmiyor, log loss'u
   iyileştiriyor; dış veriyle birlikte +0.004 [−0.004, +0.012].
 - Karar: v7 = v6 + dış veriyle CPU üyeleri + LM girdilerinde test standardizasyonu (birleştirici CV 0.4871).
+- v7 yerel uçtan uca replay (18 Ekim gece; LM öznitelikleri hazır, dış veri yolu notebook'taki gibi `--ext-dir`, sızıntı eşleşmeleri yeniden hesaplandı ve önbellekle birebir aynı): her adım ok, birleştiricinin notebook içi OOF BA'sı 0.4864 (iç içe CV 0.4871), süre 2.904 sn.
+  - SVC ve n-gram dış veri üyeleri CV'dekiyle birebir aynı. char+word LR 0.3908 (CV 0.3886) ve LM üyeleri ±0.0005: LogisticRegression'ın kaybı OpenMP ile paralel, iş parçacığı sayısı (CV 1, replay 3) toplama sırasını ve lbfgs'in yolunu değiştiriyor. Notebook birleştiriciyi kendi üye çıktılarıyla yeniden eğittiği için tutarlı.
+  - Twin ağırlığı v7 tabanında yeniden simüle edildi (satırlar 553–557): w=0.5 dört yapıda en iyi (+0.013 / +0.049 / +0.048 / +0.059 / +0.064); 1–2 metinde w=0.25 biraz daha iyi (+0.018).
 
 ## Featherless ek veri: uyum testi (16 Ekim; dal `featherless-extra-data`)
 
