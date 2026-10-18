@@ -382,6 +382,142 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   4. Ham üyelerle argmax odaklı harman (E/F).
 
 
+### Featherless ek veri iş kolu (16 Ekim'de açıldı; dal `featherless-extra-data`)
+
+**Kurallar (kullanıcıdan):**
+- Bütçe 8 $; her çağrı `data/external/featherless/costs.jsonl`'a yazılır. 8 $'a yaklaşınca durulur ve sorulur.
+- En fazla 2 eşzamanlı istek. API anahtarı hiçbir yerde görünmez.
+- Üretilen veri `data/external/`'da kalır, git'e girmez ve satır başına kaynak bilgisi taşır.
+- Dış veri kuralı netleşene kadar bu veriyle eğitilmiş model final submission'a konmaz; pipeline'da bayrakla açılır,
+  varsayılan kapalıdır.
+
+**Adımlar ve durum:**
+
+| adım | durum | not |
+|---|---|---|
+| 1. Hangi etiketler üretilebilir | bitti | glm-5.3, glm-5.3-flash, kimi-k3 birebir var. qwen3.8-max yok: `Qwen3.8-2.4T-A95B` Max'in "temeli" olarak geçiyor, kullanıcı kararı |
+| 2. Format ve prompt'lar | bitti | train metinleri tam ve tek paragraf, kırpma yok. 150 prompt Qwen3-32B ile geri kuruldu |
+| 3. Uyum testi | bitti, rapor edildi | GLM'lerde tam etiket uyumu gerçeğe yakın ama lab düzeyinde zayıf. Kimi zayıf. Sebep üslup farkı. Toplam harcama 1.217 $ |
+| 4. Ölçekleme | onay bekliyor | uyum zayıf; önce üslup talimatlı ikinci uyum testi önerildi |
+| 5. CV testi | bekliyor | ek veri yalnız eğitim katlarında, ağırlıkla dengelenecek, bayrakla açılacak |
+
+### Kaggle Benchmarks model proxy (16 Ekim: yalnız kontrol, üretim yok)
+
+- **CLI ve kota:**
+  - Kaggle CLI 2.2.4 (`pip install -U kaggle` bunu değiştirmedi; PyPI'deki son sürüm bu). `kaggle benchmarks quota`
+    komutu bu sürümde yok.
+  - Kota SDK'daki salt-okunur uç noktadan doğrulandı (`/api/v1/models/proxy/quota`, `get_model_proxy_quotas`):
+    günlük 10 $ (kullanılan 0), aylık 100 $ (kullanılan 0.013 $; yenilenme 5 Kasım).
+- **Katalog** (`kaggle benchmarks tasks models`, 43 model): 18 etiketten 12'si birebir var.
+
+| etiket | Kaggle slug | liste fiyatı $/M giriş/çıkış (kaynak) |
+|---|---|---|
+| gpt-5.5 | `gpt-5.5-2026-04-23` (GPT-5.5'in tarihli sürümü) | 5 / 30 (üçüncü taraf) |
+| gpt-5.6-luna | `gpt-5.6-luna` | 0.20 / 1.20 (üçüncü taraf) |
+| gpt-5.6-sol | `gpt-5.6-sol` | 4 / 20 kampanya, liste 5 / 30 (üçüncü taraf) |
+| gpt-5.6-terra | `gpt-5.6-terra` | 2 / 12 (üçüncü taraf) |
+| gpt-6-astra | `gpt-6-astra` | 10 / 50 (üçüncü taraf) |
+| gemini-3.1-pro-preview | `gemini-3.1-pro-preview` | 2 / 12 (üçüncü taraf) |
+| gemini-3.6-flash | `gemini-3.6-flash` | bulunamadı |
+| gemini-3.8-flash | `gemini-3.8-flash` | 0.75 / 3.75 (tek kaynak) |
+| claude-opus-4-6 | `claude-opus-4-6-default` | 5 / 25 (Anthropic) |
+| claude-opus-4-8 | `claude-opus-4-8-default` | 5 / 25 (Anthropic) |
+| claude-opus-5 | `claude-opus-5-default` | 5 / 25 (Anthropic) |
+| claude-sonnet-5 | `claude-sonnet-5-default` | 2 / 10 (Anthropic) |
+
+- **Katalogda olmayanlar:**
+  - gemini-3.7-flash, claude-fable-5 ve qwen3.8-max.
+  - glm-5.3, glm-5.3-flash ve kimi-k3 de yok; bu üçü Featherless'ta var.
+  - Aynı ailenin başka sürümleri (glm-5, qwen3-235b, gpt-6-sol, claude-opus-4-7, gemini-3.5-flash-lite vb.) sayılmadı.
+- **Maliyet:** katalogda fiyat alanı yok. Proxy her çağrının maliyetini `usage.cost` (nanodolar) içinde döndürüyor;
+  gerçek fiyat ilk küçük koşuda ölçülür.
+- **Plan (onay bekliyor; hiçbir şey çalıştırılmadı):**
+  1. **Prompt dataset'i:** private bir Kaggle dataset'i.
+     - Uyum testi için 30 geri kurulmuş train prompt'u ve hedef kelime sayıları. Yarışmadan türediği için yalnız private.
+     - Ölçekleme gerekirse train prompt'larını kopyalamayan yeni prompt'lar.
+  2. **Task kodu:** `kaggle_benchmarks` ile tek bir task.
+     - Her satır için `llm.prompt(prompt + uzunluk talimatı)` çağrılıyor.
+     - Metin, token ve maliyet run dosyasına yazılıyor.
+     - `evaluate(..., n_jobs=2)` kullanılıyor.
+  3. **Çalıştırma:** yalnız Kaggle altyapısında; yerel proxy token'ı ile toplu üretim yok.
+     - `kaggle benchmarks tasks push nllm-gen -f kaggle/bench_gen_task.py -d <private prompts>`
+     - `kaggle benchmarks tasks run nllm-gen -m <slug> --wait`: model model, her model arasında kota kontrolü.
+     - `kaggle benchmarks tasks download nllm-gen -o data/external/kaggle_bench/`
+     - Task asla `publish` edilmez.
+  4. **Bütçe:**
+     - Tahmin: ortalama uzunlukta (115 kelime ≈ 155 token, giriş ≈ 120 token) cevap başına 0.0002 $ (gpt-5.6-luna) ile
+       0.009 $ (gpt-6-astra) arası. Varsayılan düşünme ~500 token eklerse 0.0008–0.034 $.
+     - Fiyatı bilinen 11 modelin her birinden bir cevap: düşünmesiz 0.038 $, düşünmeli 0.145 $. Günlük 10 $ ile
+       ≈260 ya da ≈70 prompt (≈2.900 ya da ≈760 cevap).
+     - Uyum testi: 30 prompt × 12 model ≈ 360 cevap. Tahmin 1.2–4.4 $, tavan 5 $.
+     - Model başına cevap maliyeti tahminin 2 katını geçerse durulur.
+     - Günlük kota 10 $ zaten sert sınır.
+  5. **Değerlendirme:** Featherless adım 3 ile aynı.
+     - Fold-safe sınıflandırma (`fx_predict.py`) ve stil karşılaştırması (`fx_style.py`).
+     - Ölçekleme yalnız üretilen metinler gerçek metinlere yakın oranda tanınırsa yapılır.
+  6. **Veri kuralları:** çıktılar `data/external/` altında kalır ve her satır kaynak bilgisi taşır. Dış veri kuralı
+     netleşene kadar bu veriyle eğitilen model final submission'a girmez.
+
+### Uyum testi v2 (kullanıcı onayı 16 Ekim akşamı; kurallar üretimden ÖNCE yazıldı)
+
+- **Kapsam:** 15 etiket.
+  - Kaggle Benchmarks (12 etiket): üretim Kaggle altyapısında private bir task olarak; yerel token ile toplu üretim yok.
+  - Featherless (3 etiket): glm-5.3, glm-5.3-flash, kimi-k3.
+- **Tavanlar:** Kaggle 5 $, Featherless 1 $.
+- **Prompt'lar:** 30 geri kurulmuş train prompt'u, fold başına 6 (`src/ft2_rows.py`, tohum 20261017).
+  - Yalnız step-3 T0 çıktıları üç Featherless etiketinde de kullanılabilir olan 38 prompt arasından seçildi.
+  - Fold başına 2'si DEV (10 prompt): şablon burada seçilir.
+  - 4'ü EVAL (20 prompt): eşik yalnız burada, seçilen şablonla sınanır.
+  - Bu prompt'lar ve onlardan üretilen metinler yarışma verisinden türüyor: hiçbir yere public konmaz.
+    Kaggle dataset'i ve task private.
+- **Şablonlar** (noktalama ya da kelime alışkanlığı dayatmıyor):
+  - T0: "Answer in a single paragraph of about N words." (v1 ile aynı)
+  - T1: edebi üslup notu (canlı düzyazı, somut imge, değişken cümle ritmi, düz metin)
+  - T2: denemeci sistem prompt'u + "Keep it to one paragraph of about N words."
+  - N, aynı prompt ve etiketin train metninin kelime sayısı.
+- **Ayarlar:** temperature 1.0 (model kabul ediyorsa), düşünme `low` (kabul edilmezse modelin varsayılanı).
+- **Ölçüm:** her üretilen metni, prompt'unu görmemiş fold modeli tahmin eder.
+  - Model: 3 CPU üyesinin blend'i (ng_fw + ng_fwsh + style2; `fx_predict.py`).
+  - Ana ölçüt, etiket ve şablon başına: r = ort. P(kendi etiketi | üretilen) / ort. P(kendi etiketi | aynı prompt'ların
+    gerçek metni).
+  - Ek olarak raporlanır: kendi etiketi ve kendi lab'ı doğruluğu (üretilen ve gerçek).
+- **Şablon seçimi (yalnız DEV):** 15 etiketin r medyanı en yüksek olan şablon.
+  - 0.05'ten küçük farkta T0 seçilir (en basit olan).
+  - Bütün etiketlere tek şablon.
+- **Eşik (yalnız EVAL):** etiket r ≥ 0.7 ise geçer. Geçmeyen etiket ölçeklenmez.
+- **Uygulamada çıkan sapmalar (16 Ekim gece, maliyet yüzünden):**
+  - Kaggle'daki ilk koşular tahminden pahalı çıktı; Gemini modelleri "low" ayarında bile cevap başına 600–2.000 token
+    düşünüyor.
+  - 12 Kaggle modelinin hepsiyle DEV ve EVAL ~5.9 $ tutuyordu (tavan 5 $).
+  - Bu yüzden en pahalı iki model (gpt-5.5, gpt-6-astra) DEV'e girmedi. Şablon 13 etiketin r medyanıyla seçiliyor; bu
+    ikisi yalnız EVAL'de seçilen şablonla sınanıyor.
+  - Proxy her çağrıdan önce modelin en uzun çıktısına göre maliyet ayırıyor ve kota aşılınca 403 veriyor.
+    claude-opus-4-6 ve gpt-5.6-sol böyle başarısız oldu.
+  - Task'ın 2. sürümü çıktıyı 8.000 token ile sınırlıyor. Normal kullanım 200–2.000 token olduğundan metinleri
+    etkilemiyor.
+- **Gerçekleşen harcama (16 Ekim gece, EVAL sonrası):**
+  - Kaggle: proxy kotasına göre 4,933 $ (tavan 5 $). 12 Kaggle etiketinin hepsi EVAL'de 20/20 metinle koştu.
+    - Task'ın kaydettiği çağrı maliyetleri toplamı, ilk sürümlerde kotadan 0,72 $ az. Fark büyük olasılıkla 1. sürümün
+      403'le biten koşularından ve task oluşturma koşularından geliyor.
+    - 3. sürümden itibaren kota artışı kayıtlı maliyetle birebir aynı. Ölçekleme tahminleri bu yüzden kayıtlı maliyetle
+      yapılabilir.
+    - gemini-3.1-pro EVAL'de DEV'den pahalı çıktı: 0,62 $; cevap başına ortalama 2.575 çıktı token'ı.
+    - Kalan bütçeye sığması için sıra: önce CV recall'u en düşük olan gpt-5.5, sonra gpt-6-astra, en son gemini-3.1-pro.
+  - Featherless: 1,0105 $ (tavan 1 $).
+    - 0,0105 $'lık aşım, aynı anda giden iki isteğin bütçe kontrolünü birlikte geçmesinden. Kontrol düzeltildi:
+      uçuştaki istekler en kötü maliyetleriyle sayılıyor (commit 7650a59).
+    - kimi-k3 EVAL'de tavana takıldı: 20 metnin 5'i üretildi. Kimi uzun düşünüyor; 5 metin için 9 çağrı, çağrı başına
+      ~0,027 $. Kimi'nin EVAL r'si 5 metne dayanıyor.
+- **CV kontrolü:**
+  - Seçilen şablonla üretilen metinler (30 prompt) eğitim fold'larına eklenir. Prompt'u doğrulamadaki satırlar o
+    fold'dan çıkarılır.
+  - Ağırlıklar 0.3 ve 1.0; cpu2 üyeleri ve iç içe blend (`ext_blend.py`).
+  - BA, log loss ve etiket bazında recall raporlanır. Ölçekleme kararını kullanıcı CV'ye göre verir.
+- **Kullanıcı kararı (17 Ekim):** ölçekleme yok (seçenek A; ~2.000 satırlık pilot önerisi alınmadı).
+  - CV'de anlamlı kazanç yoktu; sonuçlar EXPERIMENTS.md'de.
+  - `--ext ft2` bayrağı kapalı kalıyor, kod silinmiyor.
+  - Private Kaggle dataset'i ve task'ı private olarak duruyor.
+
 ## 6. Çalışma kuralları (kullanıcıdan)
 
 - Kararlar CV'ye göre; her deney `EXPERIMENTS.md`'de (no, değişiklik, CV BA, CV log loss, varsa public LB). İşe yaramayanlar da yazılır.

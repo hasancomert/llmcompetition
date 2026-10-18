@@ -21,6 +21,17 @@ Models:
           a binary LinearSVC (or --nb-base lr) is fitted per class; decision values -> softmax with inner temperature
   mnb/cnb MultinomialNB / ComplementNB (alpha=--alpha) on the TF-IDF rows; log-probs -> inner temperature
 
+External training rows (extdata.py, off by default): --ext ntl_short --ext-weight W adds the external corpus rows to
+every training set only (outer fold, inner temperature folds without rows topic-matched to the inner held-out prompts);
+validation, inner held-out and test rows are official / test texts only. --ext-vocab official (default) fits the
+vectorizers on the training fold's official texts only (same feature space as without external rows; the external rows
+are only transformed), all = on the official texts + the external rows (needs ~6 GB per fold process: the char
+vocabulary of 26k texts is built before pruning). With external rows (lr head) every fit of the fold - the full
+training set and the 4 inner temperature fits - is warm-started from one model fitted on the external rows alone
+(rows topic-matched to any official prompt left out): it has seen no official row, so the inner held-out
+predictions stay honest, and the fits converge faster. (Warm-starting the inner fits from the full fit is NOT honest:
+lbfgs stops after 0-2 iterations, i.e. the inner models are the full model that saw the held-out rows.)
+
 Examples:
   python train_ngram.py --feats shapew --model lr --C 10
   python train_ngram.py --feats char+word+shapew+fw --model lr --C 30 --save
@@ -46,6 +57,7 @@ from common import (K, OUT, encode_y, iter_folds, load_folds, load_member, load_
                     metrics, run_member, scores)
 from compare import paired_bootstrap
 from train_tfidf import fit_temperature, softmax
+import extdata
 
 SCRATCH = OUT / "ngram_scratch"  # untracked outputs/ (OOF + test preds of every run, for blend checks)
 REF_TAG = "tfidf_charword_lr_C30"
@@ -180,14 +192,24 @@ def nb_ratios(X, y, alpha: float) -> np.ndarray:
     return (np.log(P / P.sum(1, keepdims=True)) - np.log(Q / Q.sum(1, keepdims=True))).astype(np.float32)
 
 
-def fit_logits(args, A_tr, y_tr):
-    """Fit the head on (A_tr, y_tr); returns f(A) -> logits (n, K)."""
+def fit_logits(args, A_tr, y_tr, sw=None, init=None):
+    """Fit the head on (A_tr, y_tr) (optional sample weights sw; lr: warm start from init = (coef, intercept));
+    returns f(A) -> logits (n, K); for lr f.model is the fitted estimator."""
     if args.model == "lr":
-        m = LogisticRegression(C=args.C, max_iter=3000, tol=1e-4).fit(A_tr, y_tr)
-        return lambda A: m.predict_log_proba(A)
+        m = LogisticRegression(C=args.C, max_iter=3000, tol=1e-4, warm_start=init is not None)
+        if init is not None:
+            m.coef_, m.intercept_ = init[0].copy(), init[1].copy()
+        m.fit(A_tr, y_tr, sample_weight=sw)
+
+        def f(A):
+            return m.predict_log_proba(A)
+        f.model = m
+        return f
     if args.model == "svc":
-        m = LinearSVC(C=args.C, max_iter=5000).fit(A_tr, y_tr)
+        m = LinearSVC(C=args.C, max_iter=5000).fit(A_tr, y_tr, sample_weight=sw)
         return lambda A: m.decision_function(A)
+    if sw is not None:
+        raise ValueError("sample weights (external rows) are supported for lr / svc heads only")
     if args.model in ("mnb", "cnb"):
         m = (MultinomialNB if args.model == "mnb" else ComplementNB)(alpha=args.alpha).fit(A_tr, y_tr)
         return lambda A: m.predict_log_proba(A)
@@ -213,8 +235,11 @@ def needs_temperature(args) -> bool:
     return args.model != "lr" or args.temp
 
 
-def run_fold(args, texts_tr: dict, y_tr, g_tr, texts_va: dict, texts_te: dict):
-    """Vectorize (fit on training texts), fit head (+ inner temperature); returns (p_va, p_te, T)."""
+def run_fold(args, texts_tr: dict, y_tr, g_tr, texts_va: dict, texts_te: dict, ext=None):
+    """Vectorize (fit on training texts), fit head (+ inner temperature); returns (p_va, p_te, T).
+    ext: None, or (texts dict, y, weights, leak sets) of the external rows allowed for this fold (extdata.py)."""
+    if ext is not None:
+        return _run_fold_ext(args, texts_tr, y_tr, g_tr, texts_va, texts_te, ext)
     blocks_tr, blocks_va, blocks_te = [], [], []
     weights = [float(w) for w in args.stream_weights.split(",")] if args.stream_weights else None
     for i, f in enumerate(args.feats.split("+")):
@@ -235,6 +260,53 @@ def run_fold(args, texts_tr: dict, y_tr, g_tr, texts_va: dict, texts_te: dict):
     return softmax(f(A_va) * T), softmax(f(A_te) * T), T
 
 
+def _run_fold_ext(args, texts_tr, y_tr, g_tr, texts_va, texts_te, ext):
+    """run_fold with external training rows: they join the head's training set and every inner-train part (minus rows
+    topic-matched to that inner held-out part's prompts); everything that is scored is official."""
+    T_e, y_e, w_e, leak_e = ext
+    weights = [float(w) for w in args.stream_weights.split(",")] if args.stream_weights else None
+    blocks = {"tr": [], "e": [], "va": [], "te": []}
+    for i, f in enumerate(args.feats.split("+")):
+        tname = STREAMS[f][0]
+        fit_texts = texts_tr[tname] + (T_e[tname] if getattr(args, "ext_vocab", "official") == "all" else [])
+        v = make_vectorizer(f, args).fit(fit_texts)
+        w = weights[i] if weights else 1.0
+        for k, t in (("tr", texts_tr), ("e", T_e), ("va", texts_va), ("te", texts_te)):
+            blocks[k].append(v.transform(t[tname]) * w)
+    A_tr, A_e, A_va, A_te = (sp.hstack(blocks[k]).tocsr() for k in ("tr", "e", "va", "te"))
+
+    def train_set(rows, e_rows):
+        return (sp.vstack([A_tr[rows], A_e[e_rows]]).tocsr(), np.concatenate([y_tr[rows], y_e[e_rows]]),
+                np.concatenate([np.ones(len(rows)), w_e[e_rows]]))
+
+    t0 = time.time()
+    it = lambda g: getattr(getattr(g, "model", None), "n_iter_", [0])[0]
+    init = None
+    clean = np.array([i for i, s in enumerate(leak_e) if not s], dtype=int)
+    if args.model == "lr" and len(clean):     # start point that has seen no official row (see the module docstring);
+                                              # none when every row answers a train prompt (--ext ft2): cold fits
+        f_e = fit_logits(args, A_e[clean], y_e[clean], w_e[clean])
+        cls = f_e.model.classes_                  # labels without external rows (--ext-drop-labels) get zero weights
+        coef, inter = np.zeros((K, A_e.shape[1])), np.full(K, float(f_e.model.intercept_.min()))
+        coef[cls], inter[cls] = f_e.model.coef_, f_e.model.intercept_
+        init = (coef, inter)
+        print(f"  [ext fold] external-only start {time.time() - t0:.0f}s ({it(f_e)} it)", flush=True)
+    f = fit_logits(args, *train_set(np.arange(len(y_tr)), np.arange(len(y_e))), init=init)
+    print(f"  [ext fold] {A_tr.shape[0]}+{A_e.shape[0]} rows x {A_tr.shape[1]} features: full fit {time.time() - t0:.0f}s "
+          f"({it(f)} it)", flush=True)
+    T = 1.0
+    if needs_temperature(args):
+        dec_in = np.zeros((len(y_tr), K))
+        for itr, iva in StratifiedGroupKFold(4, shuffle=True, random_state=7).split(A_tr, y_tr, g_tr):
+            held = set(g_tr[iva])
+            e_ok = np.array([i for i, s in enumerate(leak_e) if not (s & held)], dtype=int)
+            fi = fit_logits(args, *train_set(itr, e_ok), init=init)
+            dec_in[iva] = fi(A_tr[iva])
+            print(f"  [ext fold] inner fit {time.time() - t0:.0f}s ({it(fi)} it)", flush=True)
+        T = fit_temperature(dec_in, y_tr)
+    return softmax(f(A_va) * T), softmax(f(A_te) * T), T
+
+
 def default_tag(args) -> str:
     parts = ["ng", args.feats.replace("+", "-"), args.model]
     if args.model == "nbsvm":
@@ -252,7 +324,10 @@ def default_tag(args) -> str:
         parts.append(f"mf{args.max_features // 1000}k")
     if args.stream_weights:
         parts.append("w" + args.stream_weights.replace(",", "_"))
-    return "_".join(parts)
+    tag = "_".join(parts) + extdata.tag_suffix(args)
+    if getattr(args, "ext", "none") != "none" and args.ext_vocab == "all":
+        tag += "-vall"
+    return tag
 
 
 def describe(args) -> str:
@@ -265,7 +340,8 @@ def describe(args) -> str:
         ([f"max_features {args.max_features}"] if args.max_features else []) + \
         ([f"stream weights {args.stream_weights}"] if args.stream_weights else [])
     c = "" if args.model in ("mnb", "cnb") else f" C={args.C:g}"
-    return f"per-text n-gram streams {args.feats} ({', '.join(opts)}) + {head}{c}"
+    vocab = "" if getattr(args, "ext", "none") == "none" else f"; vectorizers fitted on {'official + external' if args.ext_vocab == 'all' else 'official'} training texts"
+    return f"per-text n-gram streams {args.feats} ({', '.join(opts)}) + {head}{c}{extdata.describe(args)}{vocab}"
 
 
 def main():
@@ -286,6 +362,9 @@ def main():
     ap.add_argument("--save", action="store_true", help="save as a member (outputs/preds) via run_member")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--note", default="")
+    extdata.add_args(ap)
+    ap.add_argument("--ext-vocab", default="official", choices=["official", "all"],
+                    help="with --ext: vectorizers fitted on the official training texts only, or + external texts")
     args = ap.parse_args()
     t0 = time.time()
     tr, te = load_train(), load_test()
@@ -296,12 +375,23 @@ def main():
     T_all = transformed_texts(args.feats, tr["text"].tolist())
     T_te = transformed_texts(args.feats, te["text"].tolist())
     splits = list(iter_folds(folds))
+    ext = extdata.load(args, tr)
+    if ext is not None and args.model not in ("lr", "svc"):
+        ap.error("--ext needs an lr or svc head (sample weights)")
+    T_ext = transformed_texts(args.feats, ext.texts) if ext is not None else None
 
     def take(d, idx):
         return {k: [v[i] for i in idx] for k, v in d.items()}
 
+    def ext_part(val):
+        """external rows allowed while the official rows `val` are held out (topic-matched rows dropped)."""
+        if ext is None:
+            return None
+        ok = np.flatnonzero(ext.allowed(set(groups[val])))
+        return take(T_ext, ok), ext.y[ok], ext.w[ok], [ext.leak[i] for i in ok]
+
     res = Parallel(n_jobs=args.n_jobs)(
-        delayed(run_fold)(args, take(T_all, trn), y[trn], groups[trn], take(T_all, val), T_te)
+        delayed(run_fold)(args, take(T_all, trn), y[trn], groups[trn], take(T_all, val), T_te, ext_part(val))
         for _, trn, val in splits)
     oof = np.zeros((len(y), K))
     test = np.zeros((len(te), K))
@@ -310,12 +400,18 @@ def main():
         test += p_te / len(splits)
     temps = [round(r[2], 3) for r in res]
     s = scores(y, oof, folds)
+    ref_tag = REF_TAG
+    if ext is not None:                       # external-data runs: compare with the same member without them
+        a0 = argparse.Namespace(**{**vars(args), "ext": "none"})
+        ref_tag = default_tag(a0)
     try:                                      # reference only for the log; absent in a fresh replay (replay.py)
-        ref, _ = load_member(REF_TAG)
+        ref, _ = load_member(ref_tag)
         cmp = paired_bootstrap(y, ref, oof, groups)
-        cmp_txt = (f"vs {REF_TAG} (0.3471 / 2.0359): diff {cmp['diff']:+.4f} [{cmp['ci_lo']:+.4f}, {cmp['ci_hi']:+.4f}]")
+        cmp_txt = (f"vs {ref_tag}: BA {cmp['ba_a']:.4f} -> {cmp['ba_b']:.4f}, diff {cmp['diff']:+.4f} "
+                   f"[{cmp['ci_lo']:+.4f}, {cmp['ci_hi']:+.4f}]; log loss {cmp['ll_a']:.4f} -> {cmp['ll_b']:.4f}"
+                   if "ba_a" in cmp else f"vs {ref_tag}: diff {cmp['diff']:+.4f} [{cmp['ci_lo']:+.4f}, {cmp['ci_hi']:+.4f}]")
     except FileNotFoundError:
-        cmp_txt = f"vs {REF_TAG}: n/a (reference member absent)"
+        cmp_txt = f"vs {ref_tag}: n/a (reference member absent)"
     print(f"[{tag}] BA {s['ba']:.4f} (folds {s['ba_fold_mean']:.4f} ± {s['ba_fold_std']:.4f}) "
           f"log loss {s['logloss']:.4f}; temps {temps}; {cmp_txt}; {time.time() - t0:.0f}s", flush=True)
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -324,7 +420,8 @@ def main():
     if args.save:
         run_member(tag, describe(args), oof, test, y, folds, t0, note=note, feats=args.feats, model=args.model,
                    C=args.C, alpha=args.alpha, binary=args.binary, min_df=args.min_df, temps=temps,
-                   script="train_ngram.py")
+                   script="train_ngram.py", ext=args.ext, ext_weight=args.ext_weight if ext is not None else None,
+                   ext_rows=len(ext) if ext is not None else 0)
     else:
         log_experiment(tag, describe(args), s, time.time() - t0, note=note + "; not saved as a member")
 

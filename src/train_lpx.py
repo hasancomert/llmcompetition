@@ -14,6 +14,10 @@ Blocks (--blocks, '+'-separated):
   style2  new hand-crafted features (style2_features.py)
 Heads (--head): lr (QuantileTransformer + StandardScaler + LogReg C), et (ExtraTrees), svc (RBF SVC, Platt),
 lgb (strongly regularised LightGBM, fixed rounds), each optionally followed by an inner grouped temperature (--temp).
+External training rows (extdata.py, off by default; lr / gam heads, style blocks only): --ext ntl_short --ext-weight W
+adds the external corpus rows to every training set (outer fold; inner temperature folds without rows topic-matched to
+the inner held-out prompts); scored rows stay official. Feature transforms (quantile, scaler) are fitted on the
+training set incl. external rows; the LR loss weights external rows by W.
 
 Usage:
   python train_lpx.py --blocks lp4+style+cross --head lr --C 0.1            # scored + logged, not saved
@@ -34,6 +38,7 @@ import pandas as pd
 from common import K, OUT, encode_y, load_folds, load_member, load_test, load_train, log_experiment, metrics, \
     run_member, scores
 from compare import fmt, paired_bootstrap
+import extdata
 
 EMB = OUT / "emb"
 SCRATCH = OUT / "lpx_scratch"
@@ -191,7 +196,17 @@ def apply_temp(P, T):
     return Q / Q.sum(1, keepdims=True)
 
 
-def fit_predict(head, C, Xtr, ytr, gtr, X_apply, temp):
+def _fit_w(head, C, X, y, sw):
+    m = make_head(head, C)
+    if sw is None:
+        return m.fit(X, y)
+    return m.fit(X, y, **{f"{m.steps[-1][0]}__sample_weight": sw})
+
+
+def fit_predict(head, C, Xtr, ytr, gtr, X_apply, temp, ext=None):
+    """ext: None or (X, y, weights, leak sets) of the external rows allowed for this fold (extdata.py)."""
+    if ext is not None:
+        return _fit_predict_ext(head, C, Xtr, ytr, gtr, X_apply, temp, ext)
     m = make_head(head, C).fit(Xtr, ytr)
     Ps = []
     for X in X_apply:
@@ -210,13 +225,47 @@ def fit_predict(head, C, Xtr, ytr, gtr, X_apply, temp):
     return Ps, T
 
 
-def run_cv(head, C, Xtr, Xte, y, g, folds, temp=False):
+def _fit_predict_ext(head, C, Xtr, ytr, gtr, X_apply, temp, ext):
+    Xe, ye, we, leak = ext
+    if head not in ("lr", "gam"):
+        raise ValueError("--ext: lr / gam heads only (sample weights)")
+
+    def fit(rows, e_rows):
+        return _fit_w(head, C, np.vstack([Xtr[rows], Xe[e_rows]]), np.concatenate([ytr[rows], ye[e_rows]]),
+                      np.concatenate([np.ones(len(rows)), we[e_rows]]))
+
+    m = fit(np.arange(len(ytr)), np.arange(len(ye)))
+    Ps = []
+    for X in X_apply:
+        P = np.zeros((len(X), K))
+        P[:, m.classes_] = m.predict_proba(X)
+        Ps.append(P)
+    T = 1.0
+    if temp:
+        from sklearn.model_selection import StratifiedGroupKFold
+        inner = np.zeros((len(ytr), K))
+        for itr, iva in StratifiedGroupKFold(4, shuffle=True, random_state=7).split(Xtr, ytr, gtr):
+            held = set(gtr[iva])
+            e_ok = np.array([i for i, s in enumerate(leak) if not (s & held)], dtype=int)
+            mi = fit(itr, e_ok)
+            inner[np.ix_(iva, mi.classes_)] = mi.predict_proba(Xtr[iva])
+        T = fit_temperature(inner, ytr)
+        Ps = [apply_temp(P, T) for P in Ps]
+    return Ps, T
+
+
+def run_cv(head, C, Xtr, Xte, y, g, folds, temp=False, ext=None, Xext=None):
+    """ext / Xext: extdata.Ext and its feature rows (external rows join the training folds only)."""
     oof, test = np.zeros((len(y), K)), np.zeros((len(Xte), K))
     n_f = int(folds.max()) + 1
     temps = []
     for k in range(n_f):
         trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
-        (pv, pt), T = fit_predict(head, C, Xtr[trn], y[trn], g[trn], [Xtr[val], Xte], temp)
+        e = None
+        if ext is not None:
+            ok = np.flatnonzero(ext.allowed(set(g[val])))
+            e = (Xext[ok], ext.y[ok], ext.w[ok], [ext.leak[i] for i in ok])
+        (pv, pt), T = fit_predict(head, C, Xtr[trn], y[trn], g[trn], [Xtr[val], Xte], temp, ext=e)
         oof[val] = pv
         test += pt / n_f
         temps.append(T)
@@ -235,6 +284,7 @@ def main():
     ap.add_argument("--note", default="")
     ap.add_argument("--drop", default="", help="comma-separated column-name prefixes to drop, e.g. s2_pb_,s2_fw_")
     ap.add_argument("--bw", default="", help="block weights after standardisation, e.g. lp4=2,style2=0.5 (lr only)")
+    extdata.add_args(ap)
     args = ap.parse_args()
     tr, te = load_train(), load_test()
     y = encode_y(tr["model"])
@@ -242,9 +292,18 @@ def main():
     folds = load_folds(tr)
     blocks = args.blocks.split("+")
     Xtr, Xte, names = build_blocks(blocks, tr, te)
+    ext = extdata.load(args, tr)
+    Xext = None
+    if ext is not None:
+        if any(b not in ("style", "style2") for b in blocks):
+            ap.error("--ext: style / style2 blocks only (LM statistics of the external texts are not extracted)")
+        Xtr2, Xext, names2 = build_blocks(blocks, tr, ext.df[["ext_id", "text"]].rename(columns={"ext_id": "id"}))
+        assert names2 == names and np.allclose(Xtr2, Xtr), "external feature columns do not line up"
     if args.drop:
         keep = [i for i, n in enumerate(names) if not n.startswith(tuple(args.drop.split(",")))]
         Xtr, Xte, names = Xtr[:, keep], Xte[:, keep], [names[i] for i in keep]
+        if Xext is not None:
+            Xext = Xext[:, keep]
     if args.bw:
         global COLW
         COLW = block_weights(names, args.bw)
@@ -256,22 +315,31 @@ def main():
     Cs = [float(c) for c in args.Cs.split(",")] if args.Cs else [args.C]
     for C in Cs:
         t0 = time.time()
-        oof, test, temps = run_cv(args.head, C, Xtr, Xte, y, g, folds, args.temp)
-        tag = args.tag or (f"lpx_{args.blocks}_{args.head}_C{C:g}{'_T' if args.temp else ''}"
-                           + (f"_bw{args.bw.replace('=', '').replace(',', '_')}" if args.bw else "")
-                           + (f"_drop{args.drop.replace(',', '_')}" if args.drop else ""))
-        r = paired_bootstrap(y, ref_oof, oof, g) if ref_oof is not None else None
+        oof, test, temps = run_cv(args.head, C, Xtr, Xte, y, g, folds, args.temp, ext=ext, Xext=Xext)
+        tag0 = args.tag or (f"lpx_{args.blocks}_{args.head}_C{C:g}{'_T' if args.temp else ''}"
+                            + (f"_bw{args.bw.replace('=', '').replace(',', '_')}" if args.bw else "")
+                            + (f"_drop{args.drop.replace(',', '_')}" if args.drop else ""))
+        tag = tag0 + extdata.tag_suffix(args)
+        ref_name, ref_cmp = REF, ref_oof
+        if ext is not None:                   # external-data runs: compare with the same member without them
+            try:
+                ref_name, ref_cmp = tag0, load_member(tag0)[0]
+            except FileNotFoundError:
+                ref_cmp = None
+        r = paired_bootstrap(y, ref_cmp, oof, g) if ref_cmp is not None else None
         change = (f"per-text {args.head} on {args.blocks} ({Xtr.shape[1]} cols)"
                   f"{', QuantileTransformer+scaler' if args.head in ('lr', 'gam', 'svc') else ''}, C/param={C:g}"
                   f"{', inner grouped temperature' if args.temp else ''}"
                   f"{', block weights ' + args.bw if args.bw else ''}"
-                  f"{', dropped column prefixes ' + args.drop if args.drop else ''} (train_lpx.py)")
-        note = (f"paired vs {REF}: {fmt(r) if r is not None else 'n/a (reference member absent)'}"
+                  f"{', dropped column prefixes ' + args.drop if args.drop else ''} (train_lpx.py)"
+                  f"{extdata.describe(args)}")
+        note = (f"paired vs {ref_name}: {fmt(r) if r is not None else 'n/a (reference member absent)'}"
                 + (f"; temps {np.round(temps, 3).tolist()}" if args.temp else "")
                 + (f"; {args.note}" if args.note else ""))
         if args.save:
             run_member(tag, change, oof, test, y, folds, t0, note=note, blocks=args.blocks, head=args.head, C=C,
-                       temp=args.temp, temps=temps, n_features=len(names))
+                       temp=args.temp, temps=temps, n_features=len(names), ext=args.ext,
+                       ext_weight=args.ext_weight if ext is not None else None, ext_rows=len(ext) if ext else 0)
         else:
             s = scores(y, oof, folds)
             log_experiment(tag, change, s, time.time() - t0, note=note + "; not saved")
