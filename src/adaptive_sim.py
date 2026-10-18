@@ -29,8 +29,33 @@ import pandas as pd
 from common import K, encode_y, load_folds, load_member, load_test, load_train, log_experiment, metrics
 from emb_kernel import combined_gram
 from emb_raw_explore import parse_blocks
-from matching import cluster_prompts
+from matching import cluster_prompts, topic_matrix
 from structure_sim import keep_rows, purity
+
+
+def mixed_clusters(texts, E, thr, max_df_docs=40):
+    """Average-linkage clusters on the mean of two cosine distances: content-word TF-IDF (matching.topic_matrix) and a
+    frozen-LM embedding E (mean-centered over the set, L2-normalized). No labels."""
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
+    X = topic_matrix(texts, max_df_docs)
+    Dt = 1.0 - (X @ X.T).toarray() if X is not None else np.ones((len(texts), len(texts)))
+    Ec = E - E.mean(0)
+    Ec /= np.linalg.norm(Ec, axis=1, keepdims=True) + 1e-12
+    D = np.clip((Dt + (1.0 - Ec @ Ec.T)) / 2, 0.0, 2.0)
+    np.fill_diagonal(D, 0.0)
+    D = (D + D.T) / 2
+    return np.unique(fcluster(linkage(squareform(D, checks=False), method="average"), thr, criterion="distance"),
+                     return_inverse=True)[1]
+
+
+def pair_stats(g, prompts):
+    """Pair precision (same cluster -> same prompt) and recall (same prompt -> same cluster)."""
+    same_c = g[:, None] == g[None, :]
+    same_p = prompts[:, None] == prompts[None, :]
+    iu = np.triu_indices(len(g), 1)
+    sc, sp = same_c[iu], same_p[iu]
+    return float((sc & sp).sum() / max(sc.sum(), 1)), float((sc & sp).sum() / max(sp.sum(), 1))
 
 
 def group_mean_rows(A, groups):
@@ -81,7 +106,9 @@ def main():
     ap.add_argument("--weights", default="0.25,0.5,1.0", help="twin evidence weights (per twin)")
     ap.add_argument("--ranges", default="1-2,1-5,2-4,3-8,18-18", help="texts kept per prompt, a-b")
     ap.add_argument("--sims", type=int, default=10)
-    ap.add_argument("--thr", type=float, default=0.92, help="matching.cluster_prompts threshold")
+    ap.add_argument("--thr", type=float, default=0.92, help="cluster cut (tfidf: matching.cluster_prompts; mix: mixed)")
+    ap.add_argument("--cluster", default="tfidf", choices=["tfidf", "mix"])
+    ap.add_argument("--mix-emb", default="qwen3_8b_base_l12@7", help="--cluster mix: name@layer-index of the embedding")
     ap.add_argument("--min-size", type=int, default=2)
     ap.add_argument("--max-size", type=int, default=18)
     ap.add_argument("--seed", type=int, default=0)
@@ -96,6 +123,14 @@ def main():
     Cs = [float(c) for c in a.C.split(",")]
     ws = [float(w) for w in a.weights.split(",")]
     views = a.views.replace(",", ";").split(";") if ";" in a.views else a.views.split(",")
+    Emix = None
+    if a.cluster == "mix":
+        from train_emb import load_feats
+        nm, li = a.mix_emb.split("@")
+        X, meta = load_feats("emb", [nm], "train")[0]
+        w = meta["dim"] // len(meta["layers"])
+        Emix = X[:, int(li) * w:(int(li) + 1) * w].astype(np.float64)
+        print(f"mixed clustering: TF-IDF + {nm} layer {meta['layers'][int(li)]} (cut {a.thr})", flush=True)
     twins = {}
     for v in views:
         blocks = parse_blocks(v)
@@ -111,12 +146,14 @@ def main():
         sa = argparse.Namespace(a=lo, b=hi)
         for sim in range(a.sims):
             keep = keep_rows("perprompt", y, prompts, rng, sa)
-            g = cluster_prompts([texts[i] for i in keep], a.thr)
+            kt = [texts[i] for i in keep]
+            g = mixed_clusters(kt, Emix[keep], a.thr) if Emix is not None else cluster_prompts(kt, a.thr)
             sizes = np.bincount(g)[g]
             adapt = (sizes >= a.min_size) & (sizes <= a.max_size)
             yk, Pp = y[keep], plain[keep]
-            res = {"range": rg, "sim": sim, "n": len(keep), "purity": purity(g, prompts[keep]),
-                   "adapt_share": float(adapt.mean()), "plain": metrics.balanced_accuracy(yk, Pp)}
+            pp, pr = pair_stats(g, prompts[keep])
+            res = {"range": rg, "sim": sim, "n": len(keep), "purity": purity(g, prompts[keep]), "pair_prec": pp,
+                   "pair_rec": pr, "adapt_share": float(adapt.mean()), "plain": metrics.balanced_accuracy(yk, Pp)}
             fk = folds[keep]
             for C in Cs:
                 L = np.zeros((len(keep), K))                 # summed twin log-probabilities (adapted rows only)
