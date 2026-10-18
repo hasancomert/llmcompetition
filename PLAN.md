@@ -320,6 +320,15 @@ GPU bütçesi:
   3. Test standartlaştırma + Sinkhorn.
   4. Kazanç varsa v6 notebook'u ve LB kontrolü.
   5. GPU açılınca (S6E10 31 Ekim'de kapanıyor): LoRA24, DeBERTa/ELECTRA, gerekirse kendi üretimimiz.
+- Durum (18 Ekim gece; sayılar EXPERIMENTS.md ve EXTERNAL_DATA.md'de):
+  1. Uyarlamalı merkezleme yapıldı. Kesim 0.85, C=0.001, w=0.5; benzetimde her yapıda olumlu (+0.011 … +0.072).
+     v6 notebook'u (`nllm-submit-gpu` v4) 21:33 UTC'de push'landı; LB bekleniyor.
+  2. Public ek veri (5 dataset, CC BY 4.0): CPU üyelerinde +0.022 … +0.043. v5 süper aile birleştiricisinde 3 CPU üyesi
+     dış veriyle 0.4719 → 0.4831. Ek veri dalı ana dala birleştirildi (`featherless-extra-data`, 18 Ekim).
+  3. Sinkhorn: nötr ya da olumsuz, benimsenmedi. Test standartlaştırma: tek üyede tam fold'da +0.006 / +0.010;
+     yığın düzeyinde CV sürüyor.
+  4. Sırada v7: v6 + dış veriyle CPU üyeleri (+ CV olumluysa test standartlaştırma). Yerel uçtan uca replay'den sonra
+     push'lanacak. Not defteri süresi ~1.8 GPU-saat (CPU üyeleri dış veriyle ~40 dk uzuyor).
 
 ### GPU planı: 17–24 Ekim haftası (kota 30 saat; kullanıcı kararı: öncelik S6E10)
 

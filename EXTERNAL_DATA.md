@@ -8,6 +8,7 @@ katlarıdır ve bir dış verinin faydası aynı katlarda eşli olarak gösteril
 |---|---|---|---|---|
 | (yok) | | | | Adım 2 sonuna kadar dış veri kullanılmadı. |
 | Kaggle `olegzholobov/name-that-llm-response-corpus` (snapshot 15 Ekim 2026), dosya `external_short_wide.parquet`: 18 modelin herkese açık kaynaklardan toplanmış 40–250 kelimelik cevapları (24.025 hücre) | Dataset "Other": kaynak başına karışık lisans. Apache-2.0, MIT, CC-BY-4.0 olanlar var; eqbench, artificialanalysis, glm_flash_analysis gibi bazılarının lisansı "unknown". Birçoğunda model çıktıları ayrıca sağlayıcı şartlarına tabi. Kaynak listesi: `data/external/ntl_corpus/source_catalog.csv` | Yalnız eğitim (TF-IDF üyesine ek eğitim satırı) | **Zararlı:** char+word TF-IDF LR 0.3471 → 0.2845, eşli −0.063 [−0.077, −0.047]. Öncül düzeltmesiyle 0.2874 (`src/ext_tfidf_probe.py`) | **Kullanılmıyor.** Hiçbir gönderimde yok. |
+| Kaggle'da 5 public üretilmiş pasaj dataset'i (prvsiyan, seyitkaangunes, lucasboesen, dophuchung, abdullah1afify; 18 Ekim indirildi); ayrıntı aşağıda | CC BY 4.0 (atıf şart) | Yalnız eğitim (CPU üyelerine ek eğitim satırı, ağırlık 0.3, sınıf dengeli) | **Olumlu:** charword +0.042, SVC +0.043, ng_fw +0.022, ng_fwsh +0.026 (hepsi anlamlı); süper aile birleştiricisi 0.4719 → 0.4831 (+0.011, P(fark ≤ 0) 0.04) | v7 adayı; henüz gönderimde yok |
 
 Dış derlem notları (16 Ekim):
 - Biçim yarışma metinlerinden çok farklı: metinlerin %94'ünde satır sonu, %55'inde markdown işareti var. Deneyde metinler
@@ -111,3 +112,51 @@ Tokenizer dosyaları veri değil, ön-eğitimli varlık sayılır; kaynakları v
 - **Kurallar açısından not:** prompt kurgulama ve üretim için yarışma train metinlerinden türeyen içerik Featherless'a
   gönderildi (150 prompt × 4 cevap ve kurulan prompt'lar). Yarışma kurallarındaki veri paylaşımı maddesi açısından
   değerlendirilmeli.
+
+## Public üretilmiş pasajlar (5 Kaggle dataset'i, CC BY 4.0; 18 Ekim)
+
+Başka yarışmacıların bu yarışma için ürettiği ve Kaggle'da herkese açık yayımladığı etiketli metinler. Hiçbiri yarışma
+metni ya da prompt'u içermiyor (dataset kartları). Yarışma kuralı 2.6'ya (dış veri herkese açık olmalı) uyuyorlar.
+
+| kaynak (kaggle.com/datasets/…) | kullanılan dosya | içerik | lisans notu |
+|---|---|---|---|
+| `prvsiyan/prvsiyans-extended-name-that-llm-dataset` | `passages_clean.csv` | Bu dataset için yazılmış yeni prompt'lar; her prompt 18 etiketin her birine bir kez gönderilmiş ("prompt blokları"). Sağlayıcıların resmi API'leri ve OpenRouter; sunulan model istenenden farklıysa karantinada | CC BY 4.0. Kart: bazı sağlayıcı şartları çıktılarla rakip model eğitmeyi kısıtlıyor. Bizim kullanımımız bir yazar sınıflandırıcısı, dil modeli değil |
+| `seyitkaangunes/ntl-extra-api-passages` | `ntl_extra_passages_claude.csv` | 1.000 yeni prompt'luk bir bankada 5 Claude etiketi (resmi Anthropic API) | CC BY 4.0; Anthropic ticari şartları çıktının sahipliğini müşteriye veriyor |
+| `lucasboesen/ntl-free-proxy-generations` | `gen_passages.csv` | Aynı bankada 8 GPT / Gemini etiketi (Kaggle Benchmarks proxy'si, reasoning low) | CC BY 4.0; prompt'lar için seyitkaangunes'e de atıf |
+| `dophuchung/ntl-proxy-generations` | `ntl_proxy_generations.csv` | Aynı bankada GPT / Gemini, ayar taraması | CC BY 4.0, "best-effort": proxy arkasındaki sağlayıcı şartları açık değil |
+| `abdullah1afify/ntl-generations` | `ntl_generations.csv` | Aynı bankada GPT / Gemini, çoğunlukla sağlayıcı varsayılanları | CC BY 4.0, "best-effort" (aynı not) |
+
+**Uygulanan kurallar** (`src/ext_pub.py`):
+- Yarışma biçimi: `ext_corpus.clean_text` (tek paragraf, markdown yok), 40–250 kelime, tekilleştirme; birden fazla
+  etikette görünen metin atıldı.
+- Banka pasajları: (prompt, etiket) başına bir tane. Ayar sırası low > default > medium > high. Reasoning "none"
+  atıldı: proxy Gemini'si düşünmeden pasajların %30–43'ünde uzun tire kullanıyor (dophuchung'un kartı).
+- Uzun tire içeren Gemini pasajları atıldı; train'deki Gemini metinlerinde hiç yok.
+- Prompt blokları etiketlerin çoğunu taşımalı: 10'dan az etiketli bloklar atıldı. Yalnız Claude içeren bir prompt,
+  18 yollu bir başlık için konuyu etiket kısayoluna çeviriyor (lucasboesen'in kartı).
+- Sınıf dengeli ağırlık (`--ext-balance`): her sınıfın toplam dış ağırlığı eşit, ortalama ağırlık 0.3. Hedef metrik
+  dengeli doğruluk; ham sayılar 164 (gemini-3.7-flash) ile 543 arasında.
+- Sonuç: ham 12.884 satır → 7.700 eğitim satırı, 544 prompt bloğu (pv 4.368, lb 1.362, sk 1.341, dp 526, ab 103).
+  Blok başına etiket sayısı: 10–13 etiket 318 blok, 15–18 etiket 225 blok.
+
+**Sızıntı kontrolü** (`src/ext_leak.py`, konu benzerliği): 314 satır resmi bir prompt'la konu eşleşmesi taşıyor. Bu
+satırlar, prompt'ları doğrulama fold'undayken o fold'un eğitiminden çıkarılıyor; iç sıcaklık bölmelerinde de aynı kural.
+Doğrulama ve OOF satırları yalnız resmi metinler. Önbellek `data/external/pub/leak_matches.csv`; notebook'ta aynı kod
+yeniden hesaplıyor.
+
+**CV** (aynı fold'lar, eşli bootstrap; ağırlık 0.3, sınıf dengeli; EXPERIMENTS D542 ve sonrası, birleştirici satır 548):
+
+| üye | BA | eşli fark [95% GA] | log loss |
+|---|---|---|---|
+| char+word TF-IDF LR | 0.3471 → 0.3886 | +0.042 [+0.024, +0.060] | 2.036 → 1.809 |
+| char TF-IDF SVC | 0.3249 → 0.3678 | +0.043 [+0.027, +0.059] | 2.061 → 1.890 |
+| n-gram fw | 0.3674 → 0.3893 | +0.022 [+0.004, +0.041] | 1.892 → 1.769 |
+| n-gram fw+shapew | 0.3674 → 0.3934 | +0.026 [+0.009, +0.043] | 1.816 → 1.750 |
+| style2 | 0.3382 → 0.3482 | +0.010 [−0.005, +0.024] | 1.917 → 1.861 |
+| style+tok LR | 0.2993 → 0.2982 | −0.001 [−0.016, +0.015] | 2.028 → 2.011 |
+| v5 süper aile birleştiricisi (3 CPU üyesi dış veriyle) | 0.4719 → 0.4831 | +0.011 [−0.002, +0.024], P(fark ≤ 0) 0.04 | 1.544 → 1.484 |
+
+- Ağırlık 1 stil üyelerinde zararlı: style2 −0.003, style+tok LR −0.020 [−0.036, −0.003].
+- Notebook'ta: dataset'ler girdi olarak eklenir (`kaggle/build_submission.py --pub-datasets`), hiçbir yere
+  kopyalanmaz ve yeniden yüklenmez. `replay.py` `*_pub` adımlarında `--ext-dir /kaggle/input` verir.
+- Atıf: bu verilerle yapılan her paylaşımda beş yazara (ve banka için seyitkaangunes'e) atıf yapılacak.

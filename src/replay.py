@@ -90,6 +90,21 @@ for tag in ("e18",):
         "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
         "--base", "tfidf_charword_lr_C30", "tfidf_char_svc_C0.3", LP4_STYLE, f"emb_qwen3_4b_base_{tag}_C0.0003",
         f"emb_qwen3_8b_base_{tag}_C0.0003", "--save", f"famcsup6_{tag}"])
+# public generated passages (ext_pub.py; CC BY 4.0 Kaggle datasets attached as notebook inputs, never copied):
+# class-balanced weight 0.3, training folds only; run_step adds --ext-dir (the attached inputs) when --pub-dir is set
+PUB = ["--ext", "pub", "--ext-balance", "--ext-weight", "0.3"]
+STEPS["charword_pub"] = ({}, "train_tfidf.py", ["--feats", "char+word", "--model", "lr", "--C", "30", *PUB])
+STEPS["svc_pub"] = ({}, "train_tfidf.py", ["--feats", "char", "--model", "svc", "--C", "0.3", *PUB])
+STEPS["ng_fw_pub"] = ({}, "train_ngram.py", ["--feats", "char+word+fw", "--model", "lr", "--C", "100", "--temp", "--save",
+                                             "--n-jobs", "4", *PUB])
+STEPS["spec_super_ng_pub"] = ({"FAMSPEC_GROUPS": "super"}, "family_spec.py", ["--view", "ng:char+word+fw", "--Cs", "30",
+                                                                              *PUB])
+# test-set standardization of the frozen-LM features (held-out fold / test rows scaled by their own statistics)
+STEPS["emb4_l12_ts"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_4b_base_l12", "--C", "0.0003", "--test-std"])
+STEPS["emb8_l12_ts"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_8b_base_l12", "--C", "0.0003", "--test-std"])
+for m in ("8", "4"):
+    STEPS[f"spec_super_e{m}_l12_ts"] = ({"FAMSPEC_GROUPS": "super"}, "family_spec.py",
+                                       ["--view", f"emb:qwen3_{m}b_base_l12", "--Cs", "0.0003", "--test-std"])
 STEPS["twins_l12"] = ({}, "adaptive_twins.py", ["--views", "qwen3_8b_base_l12,qwen3_4b_base_l12", "--C", "0.001",
                                                  "--thr", "0.85", "--tag", "twins_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
@@ -208,9 +223,18 @@ def find_ext_dir(spec: str) -> Path:
     return Path(hits[0]).parent
 
 
-def run_step(key, t0, extra=()):
+def find_pub_dir(spec: str) -> str:
+    """Root of the attached public generated-passage datasets (ext_pub.load searches below it), '' locally."""
+    if spec != "auto":
+        return spec
+    return "/kaggle/input" if glob.glob("/kaggle/input/**/passages_clean.csv", recursive=True) else ""
+
+
+def run_step(key, t0, extra=(), pub_dir=""):
     env_over, script, args = STEPS[key]
     args = list(args) + list(extra)
+    if pub_dir and "pub" in args and "--ext" in args:
+        args += ["--ext-dir", pub_dir]
     env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), NLLM_KGRAM_CACHE="0", **env_over)
     r = subprocess.run([sys.executable, str(HERE / script), *args], cwd=str(HERE), env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -235,6 +259,8 @@ def main():
     ap.add_argument("--ext", default="none", choices=["none", "ntl_short"], help="external training rows (off)")
     ap.add_argument("--ext-weight", type=float, default=0.3)
     ap.add_argument("--ext-dir", default="auto")
+    ap.add_argument("--pub-dir", default="auto", help="root of the attached public passage datasets (auto: /kaggle/input "
+                                                       "when they are attached, else the local data/external/pub)")
     a = ap.parse_args()
     t0 = time.time()
     rec = RECIPES[a.recipe]
@@ -246,11 +272,14 @@ def main():
         sfx = f"_ext-{a.ext}-w{a.ext_weight:g}"
         log(f"EXTERNAL training rows ON: {' '.join(ext_args)}", t0)
     tr, te = setup_project(a, t0)
+    pub_dir = find_pub_dir(a.pub_dir)
     try:
+        if any("pub" in STEPS[k][2] for k in rec["steps"]):
+            log(f"public generated passages read from {pub_dir or 'data/external/pub (local)'}", t0)
         if rec["needs_lm"]:
             setup_lm(a, tr, te, t0, rec.get("lm_extra", ()))
         for key in rec["steps"]:
-            run_step(key, t0, ext_args if key in EXT_STEPS else ())
+            run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir)
         from common import CLASSES, K, encode_y, load_member, metrics
         import submission as sub_check  # reuse/airline/submission.py
         w = {m + sfx: wt for m, wt in rec["weights"].items()}
