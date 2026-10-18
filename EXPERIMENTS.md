@@ -231,6 +231,59 @@ Kaggle T4, ~0.3 GPU-saat). Eskiden 4 katman vardı (9, 18, 27, 36). Özellikler 
 - Karar: v5 kalıyor; katman 1–18 ile gönderim yapılmadı. Log loss iyileşiyor ama hedef metrik BA'da kazanç yok.
 - Farklar gürültü düzeyinde. Birleştirici BA'sı ~0.47'de doymuş görünüyor.
 
+## Uyarlamalı prompt merkezleme ve test zamanı adımları (18 Ekim; satırlar 528–547)
+
+Public SOTA not defterlerinin tarifi (Lucas Boesen, "LoRA x Adaptive Centering", Apache 2.0) yeniden yazıldı; kod
+kopyalanmadı (`adaptive_sim.py`, `adaptive_twins.py`).
+- Düz boru hattı her metin için aynen kalıyor (v5).
+- Her dondurulmuş LM görüşü (8B ve 4B, 12 katman) için bir "merkezli ikiz" baş var. Eğitim satırları GERÇEK prompt'larına
+  göre merkezleniyor.
+- Test zamanında metinler konuya göre kümeleniyor (etiket yok). Yalnız 2–18 metinlik kümelerdeki metinler ikizi alıyor;
+  özellikleri kendi kümelerine göre merkezleniyor. İkizin log-olasılıkları düz tahmine EKLENİYOR (ağırlık w).
+- Tekil metinler hiç merkezlenmiyor. 16 Ekim'deki başarısızlık tam buradaydı: ham satırlar merkezli modele girmişti ve
+  değiştirme kipi kullanılmıştı.
+- Gram uzayında tam: K_c = (I − M_a) K (I − M_b)^T.
+
+**Benzetim** (tutulan prompt'lar; her prompt'ta rastgele a–b metin; 150 prompt'un tutulan metinleri tek havuzda bir kez
+kümeleniyor; C=0.001, w=0.5; düz = v5, 0.47 civarı; fark ± standart hata):
+
+| prompt başına metin | kesim 0.92 (10 sim) | kesim 0.85 (20 sim) | kesim 0.85 küme saflığı |
+|---|---|---|---|
+| 1–2 | −0.025 ± 0.007 | **+0.011 ± 0.005** | 0.958 |
+| 1–5 | +0.044 ± 0.006 | **+0.054 ± 0.004** | 0.987 |
+| 2–4 | +0.043 ± 0.005 | **+0.045 ± 0.004** | 0.988 |
+| 3–8 | +0.061 ± 0.004 | **+0.065 ± 0.002** | 0.991 |
+| 18 (tam OOF) | +0.079 | +0.072 | 0.997 |
+
+- Kesim 0.92'de 1–2 metinde zararlı; çiftlerin yalnız %40'ı doğru prompt'ta birleşiyordu. Kesim 0.85 her yapıda olumlu.
+- TF-IDF + Qwen3-8B 24. katman karışık uzaklığı TF-IDF'ten kötüydü.
+- v6 tarifi: kesim 0.85, C=0.001, ikiz başına w=0.5. Notebook `nllm-submit-gpu` v4.
+
+**Sinkhorn sınıf dengelemesi** (`common.balance`; son olasılığın sütunları düzgün sınıf kütlesine doğru, güç alpha;
+aynı 20 benzetim, dengesiz ile eşli fark):
+
+| | 1–2 | 1–5 | 2–4 | 3–8 | 18 |
+|---|---|---|---|---|---|
+| düz, alpha 0.5 | +0.001 ± 0.003 | −0.003 ± 0.001 | −0.005 ± 0.001 | −0.005 ± 0.001 | −0.003 |
+| düz + ikizler (v6), alpha 0.5 | +0.000 ± 0.004 | −0.000 ± 0.002 | +0.001 ± 0.002 | −0.002 ± 0.001 | +0.007 |
+| düz + ikizler (v6), alpha 1 | −0.007 ± 0.005 | −0.003 ± 0.002 | −0.006 ± 0.003 | −0.002 ± 0.002 | +0.010 |
+
+- Public not defterlerinde "hiç olumsuz değil, +0.002..+0.007" deniyor. Bizim birleştiricide nötr ya da olumsuz;
+  benimsenmedi. Birleştiricinin aile kütlesi ve kalibrasyonu sınıf marjinallerini zaten dengeli tutuyor olabilir.
+
+**Test kümesi standardizasyonu** (`test_std_probe.py`): değerlendirilen küme, eğitim istatistikleri yerine kendi
+ortalama / std'siyle ölçekleniyor (etiket yok). Tek LR üyesi, C=0.0003; tutulan fold ya da ondan alt örnek "test":
+
+| test kümesi | 8B 12 katman | 4B 12 katman |
+|---|---|---|
+| tutulan fold'un tamamı (540 metin) | 0.4167 → **0.4226** (+0.006) | 0.4156 → **0.4252** (+0.010) |
+| prompt başına 1–2 metin (~45 metin, 5 sim) | −0.006 ± 0.008 | −0.002 ± 0.004 |
+| prompt başına 3–8 metin (~165 metin, 5 sim) | −0.001 ± 0.003 | +0.008 ± 0.001 |
+| yalnız ortalama, tam fold | +0.003 | +0.008 |
+
+- Büyük test kümesinde olumlu; küçük kümede istatistikler gürültülü. Gizli testte ~4.000 metin var. Bu yüzden yığın
+  düzeyinde denendi: üyeler ve uzmanlar (40 satırdan küçük kümeler eğitim istatistiğinde kalıyor).
+
 ## Deney tablosu
 
 | no | tag | değişiklik | CV BA | kat BA ort. ± std | CV log loss | public LB | süre | not |

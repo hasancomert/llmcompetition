@@ -37,15 +37,25 @@ def make_model(kind, C):
                          StandardScaler(), LogisticRegression(C=C, max_iter=5000))
 
 
-def fold_fit(kind, C, Xtr, Xte, y, folds):
-    """Fit one model per shared fold; OOF rows from the held-out fold model, test = mean of the fold models."""
+def fold_fit(kind, C, Xtr, Xte, y, folds, test_std=False):
+    """Fit one model per shared fold; OOF rows from the held-out fold model, test = mean of the fold models.
+    test_std (kind emb): the held-out fold and the test rows are standardized with their OWN mean / std instead of the
+    scaler's training statistics (emb_kernel.own_stats: sets under TEST_STD_MIN rows keep the training statistics)."""
+    from emb_kernel import own_stats
     oof, test = np.zeros((len(y), K)), np.zeros((len(Xte), K))
     n_f = int(folds.max()) + 1
     for k in range(n_f):
         trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
         m = make_model(kind, C).fit(Xtr[trn], y[trn])
-        oof[np.ix_(val, m.classes_)] = m.predict_proba(Xtr[val])
-        test[:, m.classes_] += m.predict_proba(Xte) / n_f
+        proba = m.predict_proba
+        if test_std:
+            sc, head = m[0], m[-1]
+
+            def proba(X, sc=sc, head=head):
+                mu, sd = own_stats(X, sc.mean_, sc.scale_)
+                return head.predict_proba(((X - mu) / sd).astype(np.float32))
+        oof[np.ix_(val, m.classes_)] = proba(Xtr[val])
+        test[:, m.classes_] += proba(Xte) / n_f
     return oof, test
 
 
@@ -126,7 +136,11 @@ def main():
     ap.add_argument("--center-style", action="store_true", help="also center the style+tok columns (default: raw)")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--center-sim", type=int, default=0, help="only run the test-like centering check (N sims)")
+    ap.add_argument("--test-std", action="store_true",
+                    help="kind emb: held-out fold / test rows standardized with their own statistics (tag suffix _ts)")
     args = ap.parse_args()
+    if args.test_std and (args.kind != "emb" or args.center or args.with_style):
+        ap.error("--test-std is wired for plain emb members only")
 
     t0 = time.time()
     tr, te = load_train(), load_test()
@@ -158,15 +172,16 @@ def main():
         Str, Ste, _ = build("style+tok", tr, te)
         Xtr, Xte = np.hstack([Xtr, Str]), np.hstack([Xte, Ste])
 
-    oof, test = fold_fit(args.kind, args.C, Xtr, Xte, y, folds)
+    oof, test = fold_fit(args.kind, args.C, Xtr, Xte, y, folds, args.test_std)
     sty = "_style" + ("c" if args.center_style else "") if args.with_style else ""
     tag = args.tag or (f"{args.kind}_{'+'.join(names)}{'_ctr' if args.center else ''}{sty}_C{args.C:g}"
-                       if names else f"style+tok{'_ctr' if args.center else ''}_C{args.C:g}")
+                       if names else f"style+tok{'_ctr' if args.center else ''}_C{args.C:g}") + ("_ts" if args.test_std else "")
     family = {"emb": "frozen LM embeddings", "lp": "LM token log-prob stats", "style": "style+tok v2 features"}[args.kind]
     change = (f"{family} ({', '.join(names) + ', ' if names else ''}{Xtr.shape[1]} cols)"
               f"{' + prompt centering' if args.center else ''}"
               f"{' + style+tok v2' + (' (centered too)' if args.center_style else ' (not centered)') if names and args.with_style else ''}"
-              f", LogReg C={args.C:g}")
+              f", LogReg C={args.C:g}"
+              f"{'; test-set standardization (held-out fold / test rows scaled by their own mean / std)' if args.test_std else ''}")
     run_member(tag, change, oof, test, y, folds, t0, note=note, names=names, C=args.C, center=args.center,
                with_style=args.with_style, center_style=args.center_style)
 

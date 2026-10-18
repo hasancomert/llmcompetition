@@ -10,6 +10,8 @@ Views:
   emb:<blocks>  frozen-LM mean-pooled hidden states through the per-fold Gram cache (emb_kernel.py; the
                 standardization is fit on the training fold), exact linear LogReg in eigen-coordinates of the
                 family's training rows. <blocks> as emb_raw_explore.py, e.g. qwen3_8b_base or qwen3_4b_base,qwen3_8b_base
+                --test-std: held-out fold and test rows standardized with their own statistics (emb_kernel test_std;
+                transductive, no labels), outputs suffixed _ts
   ng:<streams>  TF-IDF streams of train_ngram.py (e.g. char+word+fw; vectorizers fit on the training fold) + LogReg
   lpstyle       token log-prob statistics of the 4 Qwen3 base LMs + style+tok v2 columns -> QuantileTransformer +
                 StandardScaler + LogReg (as the lp member of blend_v3_emb_logloss)
@@ -71,7 +73,7 @@ def within_family_report(y, S, name=""):
     return float(np.mean(accs)), float(np.sum(nlls) / rows_all), f"{name} " + " ".join(out)
 
 
-def emb_view(spec, y, folds, n_test, Cs):
+def emb_view(spec, y, folds, n_test, Cs, test_std=False):
     from emb_kernel import combined_gram, kcoords
     from emb_raw_explore import parse_blocks
     from sklearn.linear_model import LogisticRegression
@@ -80,7 +82,7 @@ def emb_view(spec, y, folds, n_test, Cs):
     res = {C: (np.zeros((n, K)), np.zeros((n_test, K))) for C in Cs}
     n_f = int(folds.max()) + 1
     for k in range(n_f):
-        Kfull = combined_gram(blocks, folds, k, n_test)
+        Kfull = combined_gram(blocks, folds, k, n_test, test_std=test_std)
         val = np.flatnonzero(folds == k)
         ev = np.concatenate([val, n + np.arange(n_test)])
         for f in MULTI:
@@ -176,6 +178,7 @@ def save(view, C, oof, test):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--view", required=True)
+    ap.add_argument("--test-std", action="store_true", help="emb views: held-out / test rows standardized by own stats")
     ap.add_argument("--Cs", required=True)
     a = ap.parse_args()
     t0 = time.time()
@@ -183,7 +186,7 @@ def main():
     y, folds = encode_y(tr["model"]), load_folds(tr)
     Cs = [float(c) for c in a.Cs.split(",")]
     if a.view.startswith("emb:"):
-        res = emb_view(a.view[4:], y, folds, len(te), Cs)
+        res = emb_view(a.view[4:], y, folds, len(te), Cs, a.test_std)
     elif a.view.startswith("ng:"):
         res = ng_view(a.view[3:], tr, te, y, folds, Cs)
     elif a.view == "lpstyle":
@@ -192,7 +195,7 @@ def main():
     else:
         raise SystemExit(f"unknown view {a.view}")
     for C, (oof, test) in res.items():
-        name = save(a.view, C, oof, test)
+        name = save(a.view + ("_ts" if a.test_std else ""), C, oof, test)
         ba, nll, txt = within_family_report(y, oof, name)
         print(f"{txt} | mean in-family BA {ba:.4f} cond NLL {nll:.4f}", flush=True)
     print(f"{time.time() - t0:.0f}s")

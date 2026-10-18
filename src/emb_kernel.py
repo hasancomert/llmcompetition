@@ -8,7 +8,9 @@ every layer block of every LM gets its own Gram matrix (cached under outputs/kgr
 weighting or concatenation of LMs is just a weighted sum of these matrices.
 
 Held-out (and test) rows are always processed one by one: their coordinates depend on the training rows only.
-Nothing here clusters, centers or matches held-out / test texts.
+Nothing here clusters, centers or matches held-out / test texts. Exception, on request (test_std=True, transductive,
+no labels): the held-out fold and the test set are each standardized with their OWN mean / std (sets of at least
+TEST_STD_MIN rows; smaller sets keep the training statistics), the public recipe's test-set standardization.
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from common import K, OUT, load_test, load_train
 from train_emb import EMB
 
 CACHE = OUT / "kgram"
+TEST_STD_MIN = 40       # smaller evaluation sets (the 3-row public test) keep the training statistics
 
 
 def layer_info(name):
@@ -41,13 +44,24 @@ def raw_matrix(name, tr=None, te=None):
     return np.vstack(out)
 
 
-def grams(name, folds, fold, n_test):
+def own_stats(B, mu, sd):
+    """Standardization statistics of the evaluation set B (test_std): its own mean / std (std 0 -> 1), or the given
+    training statistics when B has fewer than TEST_STD_MIN rows."""
+    if len(B) < TEST_STD_MIN:
+        return mu, sd
+    m, s = B.mean(0, dtype=np.float64), B.std(0, dtype=np.float64)
+    s[s == 0] = 1.0
+    return m, s
+
+
+def grams(name, folds, fold, n_test, test_std=False):
     """(L, N, N) float32 Gram matrices of the standardized layer blocks of `name` for one fold (N = train + test
-    rows). Standardization (mean / std, std 0 -> 1, as sklearn) uses the training rows of that fold only.
+    rows). Standardization (mean / std, std 0 -> 1, as sklearn) uses the training rows of that fold only; with
+    test_std the held-out fold rows and the test rows are standardized with their own statistics (own_stats).
     Cached under outputs/kgram/ unless NLLM_KGRAM_CACHE=0 (replay.py: with the ~4k hidden-test rows a 12-layer stack
     is ~2.2 GB per fold and LM, too much disk for a one-off use)."""
     use_cache = os.environ.get("NLLM_KGRAM_CACHE", "1") != "0"
-    path = CACHE / f"{name}_f{fold}.npy"
+    path = CACHE / f"{name}_f{fold}{'_ts' if test_std else ''}.npy"
     if use_cache and path.exists():
         G = np.load(path, mmap_mode="r")
         if G.shape[1] == len(folds) + n_test:
@@ -55,6 +69,7 @@ def grams(name, folds, fold, n_test):
     X = raw_matrix(name)
     assert len(X) == len(folds) + n_test
     trn = np.flatnonzero(folds != fold)
+    own = [np.flatnonzero(folds == fold), len(folds) + np.arange(n_test)] if test_std else []
     layers, w = layer_info(name)
     G = np.zeros((len(layers), len(X), len(X)), np.float32)
     for li in range(len(layers)):
@@ -62,6 +77,9 @@ def grams(name, folds, fold, n_test):
         mu, sd = B[trn].mean(0), B[trn].std(0)
         sd[sd == 0] = 1.0
         Z = ((B - mu) / sd).astype(np.float32)
+        for rows in own:
+            m, s = own_stats(B[rows], mu, sd)
+            Z[rows] = ((B[rows] - m) / s).astype(np.float32)
         G[li] = Z @ Z.T
     if not use_cache:
         return G
@@ -70,14 +88,15 @@ def grams(name, folds, fold, n_test):
     return np.load(path, mmap_mode="r")
 
 
-def combined_gram(blocks, folds, fold, n_test, equalize=False):
+def combined_gram(blocks, folds, fold, n_test, equalize=False, test_std=False):
     """Weighted sum of block Grams. blocks = [(name, [layer indices] | None for all, weight)].
-    equalize: weight each block by mean_width / width, so that every block contributes the same trace."""
+    equalize: weight each block by mean_width / width, so that every block contributes the same trace.
+    test_std: Grams with the held-out fold / test rows standardized by their own statistics (grams)."""
     widths = [layer_info(n)[1] * (len(ls) if ls is not None else len(layer_info(n)[0])) for n, ls, _ in blocks]
     mean_w = float(np.mean(widths))
     Ksum = None
     for (name, ls, wt), width in zip(blocks, widths):
-        G = grams(name, folds, fold, n_test)
+        G = grams(name, folds, fold, n_test, test_std)
         idx = range(G.shape[0]) if ls is None else ls
         f = wt * (mean_w / width if equalize else 1.0)
         for li in idx:
