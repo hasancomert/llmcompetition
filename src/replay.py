@@ -16,6 +16,10 @@ Recipes (CV = nested, EXPERIMENTS.md):
   v6    v5 + test-time adaptive prompt-centering: centered twins of the 8B / 4B 12-layer views (trained on true-prompt
         centered training rows) for test texts in topic clusters of 2..18 (cut 0.85), evidence added with weight 0.5
         per twin (adaptive_twins.py; simulated in adaptive_sim.py: +0.009 at 1-2 texts per prompt, +0.05 at 1-8)
+  v7    v6 with (a) the three CPU members of the super combiner trained with the public generated passages (ext_pub.py,
+        5 CC BY 4.0 Kaggle datasets attached as inputs; weight 0.3, class-balanced, training folds only) and (b) test-set
+        standardization of the 12-layer LM members and specialists (held-out fold / test rows scaled by their own
+        statistics). Combiner CV 0.4719 -> 0.4871 (+0.015 [+0.003, +0.027]); twins as in v6
 
 External training rows (extdata.py; OFF by default, cpu2 only): --ext ntl_short --ext-weight W re-runs the CPU members
 with the external corpus rows added to their training folds (member tags get the extdata suffix; blend weights stay
@@ -105,6 +109,11 @@ STEPS["emb8_l12_ts"] = ({}, "train_emb.py", ["--kind", "emb", "--names", "qwen3_
 for m in ("8", "4"):
     STEPS[f"spec_super_e{m}_l12_ts"] = ({"FAMSPEC_GROUPS": "super"}, "family_spec.py",
                                        ["--view", f"emb:qwen3_{m}b_base_l12", "--Cs", "0.0003", "--test-std"])
+STEPS["famc_super_v7"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+    "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
+    "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
+    "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
+    "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts"])
 STEPS["twins_l12"] = ({}, "adaptive_twins.py", ["--views", "qwen3_8b_base_l12,qwen3_4b_base_l12", "--C", "0.001",
                                                  "--thr", "0.85", "--tag", "twins_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
@@ -137,6 +146,13 @@ RECIPES = {
            "weights": {"famcsup6_l12": 1.0},
            "twins": {"twins_l12": 0.5},
            "cv": 0.4719},
+    "v7": {"needs_lm": True, "lm_extra": LM_L12,
+           "steps": ["charword_pub", "svc_pub", "lp4", "emb4_l12_ts", "emb8_l12_ts", "ng_fw_pub",
+                     "spec_super_e8_l12_ts", "spec_super_e4_l12_ts", "spec_super_lps", "spec_super_ng", "famc_super_v7",
+                     "twins_l12"],
+           "weights": {"famcsup6_l12_pub03_ts": 1.0},
+           "twins": {"twins_l12": 0.5},
+           "cv": 0.4871},
 }
 
 
