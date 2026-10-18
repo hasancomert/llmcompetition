@@ -8,7 +8,7 @@ katlarıdır ve bir dış verinin faydası aynı katlarda eşli olarak gösteril
 |---|---|---|---|---|
 | (yok) | | | | Adım 2 sonuna kadar dış veri kullanılmadı. |
 | Kaggle `olegzholobov/name-that-llm-response-corpus` (snapshot 15 Ekim 2026), dosya `external_short_wide.parquet`: 18 modelin herkese açık kaynaklardan toplanmış 40–250 kelimelik cevapları (24.025 hücre) | Dataset "Other": kaynak başına karışık lisans. Apache-2.0, MIT, CC-BY-4.0 olanlar var; eqbench, artificialanalysis, glm_flash_analysis gibi bazılarının lisansı "unknown". Birçoğunda model çıktıları ayrıca sağlayıcı şartlarına tabi. Kaynak listesi: `data/external/ntl_corpus/source_catalog.csv` | Yalnız eğitim (TF-IDF üyesine ek eğitim satırı) | **Zararlı:** char+word TF-IDF LR 0.3471 → 0.2845, eşli −0.063 [−0.077, −0.047]. Öncül düzeltmesiyle 0.2874 (`src/ext_tfidf_probe.py`) | **Kullanılmıyor.** Hiçbir gönderimde yok. |
-| Kaggle'da 5 public üretilmiş pasaj dataset'i (prvsiyan, seyitkaangunes, lucasboesen, dophuchung, abdullah1afify; 18 Ekim indirildi); ayrıntı aşağıda | CC BY 4.0 (atıf şart) | Yalnız eğitim (CPU üyelerine ek eğitim satırı, ağırlık 0.3, sınıf dengeli) | **Olumlu:** charword +0.042, SVC +0.043, ng_fw +0.022, ng_fwsh +0.026 (hepsi anlamlı); süper aile birleştiricisi 0.4719 → 0.4831 (+0.011, P(fark ≤ 0) 0.04) | v7 adayı; henüz gönderimde yok |
+| Kaggle'da 5 public üretilmiş pasaj dataset'i (prvsiyan, seyitkaangunes, lucasboesen, dophuchung, abdullah1afify; 18 Ekim indirildi); ayrıntı aşağıda | CC BY 4.0 (atıf şart) | Yalnız eğitim (CPU üyelerine ek eğitim satırı, ağırlık 0.3, sınıf dengeli) | **Olumlu:** charword +0.042, SVC +0.043, ng_fw +0.022, ng_fwsh +0.026 (hepsi anlamlı); süper aile birleştiricisi 0.4719 → 0.4831 (+0.011, P(fark ≤ 0) 0.04) | v7'de (charword, SVC, ng_fw; ağırlık 0.3); v7 henüz gönderilmedi |
 
 Dış derlem notları (16 Ekim):
 - Biçim yarışma metinlerinden çok farklı: metinlerin %94'ünde satır sonu, %55'inde markdown işareti var. Deneyde metinler
@@ -156,7 +156,9 @@ yeniden hesaplıyor.
 | style+tok LR | 0.2993 → 0.2982 | −0.001 [−0.016, +0.015] | 2.028 → 2.011 |
 | v5 süper aile birleştiricisi (3 CPU üyesi dış veriyle) | 0.4719 → 0.4831 | +0.011 [−0.002, +0.024], P(fark ≤ 0) 0.04 | 1.544 → 1.484 |
 
-- Ağırlık 1 stil üyelerinde zararlı: style2 −0.003, style+tok LR −0.020 [−0.036, −0.003].
+- Ağırlık 1 genelde 0.3'ten kötü: charword +0.034, SVC +0.039; ng_fw +0.026 ve ng_fwsh +0.028 (0.3'e yakın); stil üyelerinde zararlı (style2 −0.003, style+tok LR −0.020 [−0.036, −0.003]).
+- cpu2'nin iç içe CPU blend'i (D554–D557): 0.4038 → 0.4234 (5 üye dış veriyle, +0.020 [+0.002, +0.037]); düz ve dış veriyle sürümler birlikte aday olunca 0.4423 (+0.039 [+0.024, +0.054]). Ağırlık 1: 0.4131 / 0.4327.
+- v7 birleştiricisinde (LM girdileri test std) 0.4871; düz sürümleri de aday yapmak değiştirmiyor (hill-climb yalnız dış veriyle sürümleri seçiyor). Dış veriyle n-gram aile uzmanı aile içi BA'yı 0.418 → 0.447 yapıyor ama birleştiricide BA değişmiyor; kullanılmadı.
 - Notebook'ta: dataset'ler girdi olarak eklenir (`kaggle/build_submission.py --pub-datasets`), hiçbir yere
   kopyalanmaz ve yeniden yüklenmez. `replay.py` `*_pub` adımlarında `--ext-dir /kaggle/input` verir.
 - Atıf: bu verilerle yapılan her paylaşımda beş yazara (ve banka için seyitkaangunes'e) atıf yapılacak.
