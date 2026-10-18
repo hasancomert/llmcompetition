@@ -301,6 +301,26 @@ GPU bütçesi:
     - Kullanıcı kararıyla sonraya bırakıldı.
     - Kaggle GPU'su S6E10 TabPFN kararına bağlı; o oturum kullanıcının seçimini bekliyor.
 
+### Yeni yön (18 Ekim, kullanıcı onayı): public SOTA'dan öğrenilenler
+
+- Durum: public LB 0.435, 1.642 takımda 931. sıra. 425 takım ≥ 0.55; en iyi public notebook'lar 0.55–0.56.
+- Public SOTA'nın temeli Lucas Boesen'in "LoRA x Adaptive Centering" notebook'u (0.549); fork'ları 0.552–0.563.
+  Bizden farkları:
+  1. Uyarlamalı prompt merkezleme.
+     - Yalnız 2–18 metinlik test kümelerine, merkezlenmiş bir "ikiz" model uygulanıyor.
+     - Düz tahmin herkes için korunuyor; ikizin kanıtı onun üstüne ekleniyor.
+     - Tek kalan metinler hiç merkezlenmiyor. Bizim 16 Ekim'deki başarısızlığımız tam bu hataydı.
+  2. Test setiyle standartlaştırma ve Sinkhorn sınıf dengeleme.
+  3. Daha güçlü üyeler: LoRA24 (Qwen3-8B, 24 katman, tek başına ~0.48), dondurulmuş DeBERTa/ELECTRA, Claude içi kapı.
+  4. Ek veri: Kaggle proxy'si ve API'lerle üretilmiş public dataset'ler (CC BY 4.0).
+- Sıra:
+  1. Uyarlamalı merkezleme. CPU'da yapılır; 1–2 / 1–5 / 3–8 metin/prompt simülasyonuyla ölçülür.
+  2. Public ek verinin CV değerlendirmesi. Yalnız eğitim fold'larında; sızıntı kontrolü ve lisans kaydıyla.
+     Paralel yürür.
+  3. Test standartlaştırma + Sinkhorn.
+  4. Kazanç varsa v6 notebook'u ve LB kontrolü.
+  5. GPU açılınca (S6E10 31 Ekim'de kapanıyor): LoRA24, DeBERTa/ELECTRA, gerekirse kendi üretimimiz.
+
 ### GPU planı: 17–24 Ekim haftası (kota 30 saat; kullanıcı kararı: öncelik S6E10)
 
 Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda en fazla 2 GPU oturumu var.
@@ -377,3 +397,8 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
 - Para harcayan, bir şeyi public yapan ya da büyük yön değiştiren her adımdan önce sorulur. Kaggle dataset ve not defterleri private.
 - Kullanılan kod/model lisansları ticari kullanımı kısıtlamamalı; `MODELS_LICENSES.md`'ye yazılır.
 - Yalnız gerçekten çalıştırılıp ölçülen sonuçlar raporlanır.
+- Kaggle Benchmarks model proxy'si (18 Ekim): Kaggle'ın ücretsiz AI kotası, para harcanmıyor.
+  - Günlük limit (10 $ birim) içinde serbestçe kullanılabilir.
+  - Aylık kullanım limitin yarısına (50 $) ulaşınca kullanıcıya sorulur.
+  - Üretim Kaggle altyapısında private task olarak yapılır; yerel proxy token'ıyla toplu üretim yok.
+  - Yarışma prompt'ları kopyalanmaz; yalnız tür ve uzunluk taklit edilir.
