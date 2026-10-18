@@ -14,7 +14,8 @@ test only needs K[test rows, train rows], centered by the test clusters on the l
 Simulation (as the public pooled sim): the held-out folds play the hidden test; every prompt keeps a random number of
 texts in [a, b] (distinct models); the kept texts of all 150 prompts are clustered ONCE as one pooled set; each kept
 text is predicted by the models of its own fold. Reported per setting: BA of the plain pipeline, BA with twins for a
-grid of weights, cluster purity, share of texts that got a twin.
+grid of weights, cluster purity, share of texts that got a twin. --balance adds Sinkhorn marginal balancing
+(common.balance, no labels) of the final posterior over the whole pooled set, as on the hidden test.
 
 Usage: python adaptive_sim.py --views qwen3_8b_base_l12,qwen3_4b_base_l12 --C 0.0003,0.001 --ranges 1-2,1-5,2-4,3-8
 """
@@ -26,7 +27,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from common import K, encode_y, load_folds, load_member, load_test, load_train, log_experiment, metrics
+from common import K, balance, encode_y, load_folds, load_member, load_test, load_train, log_experiment, metrics
 from emb_kernel import combined_gram
 from emb_raw_explore import parse_blocks
 from matching import cluster_prompts, topic_matrix
@@ -111,6 +112,7 @@ def main():
     ap.add_argument("--mix-emb", default="qwen3_8b_base_l12@7", help="--cluster mix: name@layer-index of the embedding")
     ap.add_argument("--min-size", type=int, default=2)
     ap.add_argument("--max-size", type=int, default=18)
+    ap.add_argument("--balance", default="", help="Sinkhorn balancing strengths alpha (comma-separated; empty: none)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log", default="", help="EXPERIMENTS.md tag prefix (empty: no rows)")
     a = ap.parse_args()
@@ -122,6 +124,7 @@ def main():
     plain = load_member(a.plain)[0]
     Cs = [float(c) for c in a.C.split(",")]
     ws = [float(w) for w in a.weights.split(",")]
+    alphas = [float(b) for b in a.balance.split(",")] if a.balance else []
     views = a.views.replace(",", ";").split(";") if ";" in a.views else a.views.split(",")
     Emix = None
     if a.cluster == "mix":
@@ -155,6 +158,10 @@ def main():
             res = {"range": rg, "sim": sim, "n": len(keep), "purity": purity(g, prompts[keep]), "pair_prec": pp,
                    "pair_rec": pr, "adapt_share": float(adapt.mean()), "plain": metrics.balanced_accuracy(yk, Pp)}
             fk = folds[keep]
+            lp = np.log(np.clip(Pp, 1e-9, 1))
+            ba = lambda z: metrics.balanced_accuracy(yk, np.eye(K)[z.argmax(1)])
+            for b in alphas:
+                res[f"plain_b{b:g}"] = ba(balance(lp, b))
             for C in Cs:
                 L = np.zeros((len(keep), K))                 # summed twin log-probabilities (adapted rows only)
                 for v in views:
@@ -166,25 +173,30 @@ def main():
                             P = twins[v, k].predict(keep[members], g[members], C)
                             pos = {r: i for i, r in enumerate(members)}
                             L[loc] += np.log(np.clip(P[[pos[r] for r in loc]], 1e-9, 1))
-                lp = np.log(np.clip(Pp, 1e-9, 1))
                 for w in ws:
                     z = lp + w * L
-                    res[f"C{C:g}_w{w:g}"] = metrics.balanced_accuracy(yk, np.eye(K)[z.argmax(1)])
+                    res[f"C{C:g}_w{w:g}"] = ba(z)
+                    for b in alphas:
+                        res[f"C{C:g}_w{w:g}_b{b:g}"] = ba(balance(z, b))
             rows.append(res)
             print(" ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in res.items()), flush=True)
     df = pd.DataFrame(rows)
     cols = [c for c in df.columns if c not in ("range", "sim", "n")]
+    var = [c for c in cols if c.startswith(("C", "plain_b"))]          # variants, compared with the plain pipeline
     summ = df.groupby("range")[cols].mean()
-    for c in cols:
-        if c.startswith("C"):
-            d = df[c] - df["plain"]
-            summ[f"d_{c}"] = d.groupby(df["range"]).mean()
-            summ[f"se_{c}"] = d.groupby(df["range"]).std(ddof=1) / np.sqrt(df.groupby("range").size())
+    for c in var:
+        d = df[c] - df["plain"]
+        summ[f"d_{c}"] = d.groupby(df["range"]).mean()
+        summ[f"se_{c}"] = d.groupby(df["range"]).std(ddof=1) / np.sqrt(df.groupby("range").size())
+        if "_b" in c:                                                  # balancing alone: vs the same unbalanced variant
+            d = df[c] - df[c.rsplit("_b", 1)[0]]
+            summ[f"dB_{c}"] = d.groupby(df["range"]).mean()
+            summ[f"seB_{c}"] = d.groupby(df["range"]).std(ddof=1) / np.sqrt(df.groupby("range").size())
     pd.set_option("display.width", 250)
     print(summ.round(4).T.to_string(), flush=True)
     if a.log:
         for rg, r in summ.iterrows():
-            best = max((c for c in cols if c.startswith("C")), key=lambda c: r[f"d_{c}"])
+            best = max(var, key=lambda c: r[f"d_{c}"])
             s = {"ba": r[best], "ba_fold_mean": r[best], "ba_fold_std": 0.0, "logloss": float("nan")}
             log_experiment(f"{a.log}_{rg}", f"ADAPTIVE CENTERING SIM (diagnostic): plain {a.plain} + centered twins "
                            f"({', '.join(views)}; true-prompt-centered training, clusters {a.min_size}..{a.max_size} "
@@ -192,7 +204,7 @@ def main():
                            f"{a.sims} sims (adaptive_sim.py)", s, time.time() - t0,
                            note=f"plain {r['plain']:.4f}; " + "; ".join(
                                f"{c}: {r[c]:.4f} ({r[f'd_{c}']:+.4f} ± {r[f'se_{c}']:.4f})"
-                               for c in cols if c.startswith("C")) +
+                               for c in var) +
                            f"; purity {r['purity']:.3f}, adapted share {r['adapt_share']:.3f}; best {best} picked "
                            f"on the same sims")
 

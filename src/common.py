@@ -85,6 +85,22 @@ def scores(y, P, folds) -> dict:
                 ba_fold_mean=float(np.mean(per)), ba_fold_std=float(np.std(per)), ba_folds=per)
 
 
+def balance(z, alpha: float, iters: int = 50) -> np.ndarray:
+    """Sinkhorn marginal balancing of a test posterior (no labels used): P = softmax(z) by rows, then `iters`
+    alternations of rescaling the columns toward (1 - alpha) * their own mass + alpha * uniform mass and
+    renormalizing the rows. alpha 0 (or fewer than 2 rows) returns softmax(z) unchanged."""
+    z = np.asarray(z, np.float64)
+    P = np.exp(z - z.max(1, keepdims=True))
+    P /= P.sum(1, keepdims=True)
+    if alpha <= 0 or len(P) < 2:
+        return P
+    target = (1 - alpha) * P.sum(0) + alpha * len(P) / P.shape[1]
+    for _ in range(iters):
+        P *= (target / (P.sum(0) + 1e-12))[None, :]
+        P /= P.sum(1, keepdims=True) + 1e-12
+    return P
+
+
 def src_sha() -> str:
     """Hash of every src/*.py file: which code version produced a saved member."""
     h = hashlib.sha256()
