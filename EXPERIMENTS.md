@@ -284,6 +284,26 @@ ortalama / std'siyle ölçekleniyor (etiket yok). Tek LR üyesi, C=0.0003; tutul
 - Büyük test kümesinde olumlu; küçük kümede istatistikler gürültülü. Gizli testte ~4.000 metin var. Bu yüzden yığın
   düzeyinde denendi: üyeler ve uzmanlar (40 satırdan küçük kümeler eğitim istatistiğinde kalıyor).
 
+**Yığın düzeyinde** (`train_emb.py --test-std`, `family_spec.py --test-std`; satırlar 549–552):
+
+| | eğitim istatistiği | test kümesi istatistiği | eşli fark |
+|---|---|---|---|
+| 8B 12 katman üyesi | 0.4163 / 1.695 | **0.4230** / 1.668 | +0.007 [−0.003, +0.016] |
+| 4B 12 katman üyesi | 0.4149 / 1.714 | **0.4256** / 1.688 | +0.011 [+0.003, +0.019] |
+| 8B süper aile uzmanı (aile içi BA / NLL) | 0.4651 / 1.391 | **0.4763** / 1.372 | |
+| 4B süper aile uzmanı | 0.4636 / 1.395 | **0.4716** / 1.376 | |
+
+| süper aile birleştiricisi | BA | log loss | v5'e göre |
+|---|---|---|---|
+| v5 (`famcsup6_l12`) | 0.4719 | 1.5436 | |
+| LM girdileri test std (`famcsup6_l12_ts`) | 0.4719 | 1.5289 | ±0.000 [−0.008, +0.007] |
+| 3 CPU üyesi dış veriyle (`famcsup6_l12_pub03`) | 0.4831 | 1.4842 | +0.011 [−0.002, +0.024] |
+| ikisi birlikte (`famcsup6_l12_pub03_ts`) | **0.4871** | **1.4746** | **+0.015 [+0.003, +0.027]**, P(fark ≤ 0) 0.009 |
+
+- Test standardizasyonu üyeleri ve uzmanları iyileştiriyor. Birleştiricide BA'yı tek başına değiştirmiyor, log loss'u
+  iyileştiriyor; dış veriyle birlikte +0.004 [−0.004, +0.012].
+- Karar: v7 = v6 + dış veriyle CPU üyeleri + LM girdilerinde test standardizasyonu (birleştirici CV 0.4871).
+
 ## Featherless ek veri: uyum testi (16 Ekim; dal `featherless-extra-data`)
 
 > Ek veri dalı (`featherless-extra-data`) 18 Ekim'de ana dala birleştirildi. Bu dalın deney satırları `D` önekiyle ayrı tabloda (dosyanın sonunda); iki dal aynı numaraları kullanmıştı.
