@@ -362,6 +362,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Kaggle kotasına göre toplam 2.95 sa (04:46). Kalan 27.05 sa.
     - Gizli test için yeniden koşma kotadan düşmüyor.
     - `nllm-gpu-embed-e18` v1 (8B/4B, katman 1–18): 09:02–09:18, ~0.27 sa. Toplam ~3.2 sa.
+    - `nllm-submit-gpu` v4 (v6, 18 Ekim): 21:33–22:28, ~0.9 sa. Toplam ~4.1 sa. S6E10 bu hafta GPU kullanmadı (18 Ekim 22:00'de kernel listesi).
   - LoRA probe2 sonucu:
     - Tek başına zayıf: 2 fold'da 0.4085; dondurulmuş 4B gömmeleri 0.4354.
     - Ama tamamlayıcı (EXPERIMENTS satır 493).
