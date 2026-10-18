@@ -3,6 +3,8 @@
   --ext none        (default) official train only: every member behaves exactly as before
   --ext ntl_short   Kaggle olegzholobov/name-that-llm-response-corpus, short view (ext_corpus.load: competition
                     format, 40-250 words, de-duplicated; quarantine_luna_* never used)
+  --ext pub         public generated passages (ext_pub.load: CC BY 4.0 Kaggle datasets of prvsiyan, seyitkaangunes,
+                    lucasboesen, dophuchung, abdullah1afify; prompt blocks with >= --ext-min-labels labels)
   --ext ft2         fit test v2 generated texts (ft2_eval.load_generated, dev + eval splits, one --ext-template);
                     each answers a reconstructed TRAIN prompt, so it is left out whenever that prompt_id is validated
 
@@ -21,7 +23,7 @@ import pandas as pd
 
 from common import CLASS_INDEX, ROOT
 
-CHOICES = ("none", "ntl_short", "ft2")
+CHOICES = ("none", "ntl_short", "ft2", "pub")
 
 
 def add_args(ap):
@@ -35,6 +37,9 @@ def add_args(ap):
     g.add_argument("--ext-dir", default="", help="dataset directory (default data/external/ntl_corpus)")
     g.add_argument("--ext-limit", type=int, default=0, help="smoke tests: keep a random subset of this size")
     g.add_argument("--ext-template", default="T0", help="--ext ft2: generation template to use")
+    g.add_argument("--ext-min-labels", type=int, default=10, help="--ext pub: minimum labels per prompt block")
+    g.add_argument("--ext-balance", action="store_true",
+                   help="per-class external weights: every class gets the same total external weight (mean = weight)")
 
 
 def tag_suffix(a) -> str:
@@ -49,12 +54,21 @@ def tag_suffix(a) -> str:
         s += f"-droplab{len(a.ext_drop_labels.split(';'))}"
     if a.ext_limit:
         s += f"-n{a.ext_limit}"
+    if getattr(a, "ext_min_labels", 10) != 10:
+        s += f"-ml{a.ext_min_labels}"
+    if getattr(a, "ext_balance", False):
+        s += "-bal"
     return s
 
 
 def describe(a) -> str:
     if getattr(a, "ext", "none") == "none":
         return ""
+    if a.ext == "pub":
+        return (f"; + PUBLIC GENERATED training rows (CC BY 4.0 Kaggle datasets, prompt blocks >= "
+                f"{a.ext_min_labels} labels, weight {a.ext_weight:g}{', class-balanced' if a.ext_balance else ''}"
+                f"{', dropped sources ' + a.ext_drop_sources if a.ext_drop_sources else ''}; training folds only, "
+                f"topic-matched rows left out when their prompt_id is validated)")
     if a.ext == "ft2":
         return (f"; + GENERATED training rows (fit test v2 texts, template {a.ext_template}, weight {a.ext_weight:g}"
                 f"{', dropped labels ' + a.ext_drop_labels if getattr(a, 'ext_drop_labels', '') else ''}; training folds "
@@ -91,6 +105,8 @@ def load(a, tr: pd.DataFrame | None = None) -> Ext | None:
         return None
     if a.ext == "ft2":
         return _load_ft2(a)
+    if a.ext == "pub":
+        return _load_pub(a, tr)
     import ext_corpus
     import ext_leak
     root = a.ext_dir or None
@@ -116,6 +132,42 @@ def load(a, tr: pd.DataFrame | None = None) -> Ext | None:
     n_leak = sum(bool(s) for s in leak)
     print(f"[extdata] {a.ext}: {len(df)} external training rows (weight {a.ext_weight:g}; licenses {a.ext_licenses}); "
           f"{n_leak} topic-matched to official prompts (left out when validated)", flush=True)
+    return Ext(df=df, y=y, groups=("ext:" + df["prompt_group_id"].astype(str)).to_numpy(), w=w, leak=leak)
+
+
+def _balanced(y: np.ndarray, w: float) -> np.ndarray:
+    """Per-row weights giving every present class the same total external weight, mean weight w."""
+    cnt = np.bincount(y, minlength=len(CLASS_INDEX)).astype(float)
+    per = np.where(cnt > 0, len(y) / ((cnt > 0).sum() * np.maximum(cnt, 1)), 0.0)
+    return w * per[y]
+
+
+def _load_pub(a, tr: pd.DataFrame | None) -> Ext:
+    import ext_leak
+    import ext_pub
+    df = ext_pub.load(min_labels=a.ext_min_labels, root=a.ext_dir or None)
+    if a.ext_drop_sources:
+        df = df[~df["source"].isin(a.ext_drop_sources.split(";"))]
+    if getattr(a, "ext_drop_labels", ""):
+        df = df[~df["label"].isin(a.ext_drop_labels.split(";"))]
+    df = df.reset_index(drop=True)
+    if a.ext_limit and a.ext_limit < len(df):
+        df = df.sample(n=a.ext_limit, random_state=0).reset_index(drop=True)
+    tr = tr if tr is not None else pd.read_csv(ROOT / "data" / "train.csv")
+    cache = ext_pub.D / "leak_matches.csv"
+    lm = pd.read_csv(cache, keep_default_na=False) if (cache.exists() and not a.ext_dir) else None
+    if lm is None or not set(df["ext_id"]).issubset(set(lm["ext_id"])):
+        lm, _ = ext_leak.compute(tr, ext_pub.load(min_labels=1, root=a.ext_dir or None))
+        if not a.ext_dir:
+            lm.to_csv(cache, index=False)
+    gp = dict(zip(lm["ext_id"], lm["group_pids"]))
+    leak = [set(p for p in str(gp.get(e, "")).split(";") if p) for e in df["ext_id"]]
+    y = df["label"].map(CLASS_INDEX).to_numpy()
+    w = _balanced(y, a.ext_weight) if a.ext_balance else np.full(len(df), float(a.ext_weight))
+    print(f"[extdata] pub: {len(df)} external training rows over {df['prompt_group_id'].nunique()} prompt blocks "
+          f"(weight {a.ext_weight:g}{', class-balanced' if a.ext_balance else ''}; sources "
+          f"{df['source'].value_counts().to_dict()}); {sum(bool(s) for s in leak)} topic-matched to official prompts "
+          f"(left out when validated)", flush=True)
     return Ext(df=df, y=y, groups=("ext:" + df["prompt_group_id"].astype(str)).to_numpy(), w=w, leak=leak)
 
 
