@@ -21,6 +21,7 @@ import time
 
 import numpy as np
 
+import extdata
 from common import K, OUT, encode_y, load_folds, load_test, load_train, run_member
 
 EMB = OUT / "emb"
@@ -37,16 +38,49 @@ def make_model(kind, C):
                          StandardScaler(), LogisticRegression(C=C, max_iter=5000))
 
 
-def fold_fit(kind, C, Xtr, Xte, y, folds, test_std=False):
+def ext_feats(kind, names, ext):
+    """(n_ext, d) features of the external rows (split ext_pub, gpu_run_embed.py EMB_TEXTS=ext_pub) in ext.df order.
+    lp of a base LM may come from its 12-layer pass (same model, same token log-probs)."""
+    mats = []
+    for nm in names:
+        src = nm
+        if not (EMB / f"{kind}_{src}_ext_pub.npy").exists() and kind == "lp":
+            src = f"{nm}_l12"
+        meta = json.loads((EMB / f"meta_{src}_ext_pub.json").read_text())
+        X = np.load(EMB / f"{kind}_{src}_ext_pub.npy").astype(np.float32)
+        pos = {e: i for i, e in enumerate(meta["ids"])}
+        miss = [e for e in ext.df["ext_id"] if e not in pos]
+        assert not miss, f"{src}: {len(miss)} external rows have no features"
+        mats.append(X[[pos[e] for e in ext.df["ext_id"]]])
+    return np.hstack(mats)
+
+
+def fold_fit(kind, C, Xtr, Xte, y, folds, test_std=False, ext=None, Xe=None, groups=None, ext_scale="official"):
     """Fit one model per shared fold; OOF rows from the held-out fold model, test = mean of the fold models.
     test_std (kind emb): the held-out fold and the test rows are standardized with their OWN mean / std instead of the
-    scaler's training statistics (emb_kernel.own_stats: sets under TEST_STD_MIN rows keep the training statistics)."""
+    scaler's training statistics (emb_kernel.own_stats: sets under TEST_STD_MIN rows keep the training statistics).
+    ext (extdata.Ext) + Xe (its features): external rows join each training fold (rows topic-matched to the held-out
+    prompts left out) with their weights; kind emb scales them with the official training statistics (ext_scale
+    'official') or with their own ('own'); kind lp fits its whole pipeline on official + external rows."""
     from emb_kernel import own_stats
     oof, test = np.zeros((len(y), K)), np.zeros((len(Xte), K))
     n_f = int(folds.max()) + 1
     for k in range(n_f):
         trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
-        m = make_model(kind, C).fit(Xtr[trn], y[trn])
+        if ext is None:
+            m = make_model(kind, C).fit(Xtr[trn], y[trn])
+        else:
+            ok = np.flatnonzero(ext.allowed(set(groups[val])))
+            yf = np.concatenate([y[trn], ext.y[ok]])
+            wf = np.concatenate([np.ones(len(trn)), ext.w[ok]])
+            m = make_model(kind, C)
+            if kind == "emb":                        # scaler from the official training rows, LR on all rows
+                sc = m[0].fit(Xtr[trn])
+                Ze = sc.transform(Xe[ok]) if ext_scale == "official" else \
+                    (Xe[ok] - Xe[ok].mean(0)) / np.where(Xe[ok].std(0) > 0, Xe[ok].std(0), 1)
+                m[-1].fit(np.vstack([sc.transform(Xtr[trn]), Ze]).astype(np.float32), yf, sample_weight=wf)
+            else:
+                m.fit(np.vstack([Xtr[trn], Xe[ok]]), yf, logisticregression__sample_weight=wf)
         proba = m.predict_proba
         if test_std:
             sc, head = m[0], m[-1]
@@ -138,7 +172,12 @@ def main():
     ap.add_argument("--center-sim", type=int, default=0, help="only run the test-like centering check (N sims)")
     ap.add_argument("--test-std", action="store_true",
                     help="kind emb: held-out fold / test rows standardized with their own statistics (tag suffix _ts)")
+    extdata.add_args(ap)
+    ap.add_argument("--ext-scale", default="official", choices=["official", "own"],
+                    help="kind emb with --ext: scale external rows with the official training statistics or their own")
     args = ap.parse_args()
+    if args.ext != "none" and (args.kind == "style" or args.center or args.with_style or args.center_sim):
+        ap.error("--ext is wired for plain emb / lp members only")
     if args.test_std and (args.kind != "emb" or args.center or args.with_style):
         ap.error("--test-std is wired for plain emb members only")
 
@@ -172,16 +211,23 @@ def main():
         Str, Ste, _ = build("style+tok", tr, te)
         Xtr, Xte = np.hstack([Xtr, Str]), np.hstack([Xte, Ste])
 
-    oof, test = fold_fit(args.kind, args.C, Xtr, Xte, y, folds, args.test_std)
+    ext = extdata.load(args, tr)
+    Xe = ext_feats(args.kind, names, ext) if ext is not None else None
+    if ext is not None and args.with_style:
+        ap.error("--ext with --with-style needs the style+tok columns of the external rows (not wired)")
+    oof, test = fold_fit(args.kind, args.C, Xtr, Xte, y, folds, args.test_std, ext, Xe,
+                         tr["prompt_id"].to_numpy(), args.ext_scale)
     sty = "_style" + ("c" if args.center_style else "") if args.with_style else ""
     tag = args.tag or (f"{args.kind}_{'+'.join(names)}{'_ctr' if args.center else ''}{sty}_C{args.C:g}"
-                       if names else f"style+tok{'_ctr' if args.center else ''}_C{args.C:g}") + ("_ts" if args.test_std else "")
+                       if names else f"style+tok{'_ctr' if args.center else ''}_C{args.C:g}") + ("_ts" if args.test_std else "") \
+        + extdata.tag_suffix(args) + ("-own" if ext is not None and args.ext_scale == "own" else "")
     family = {"emb": "frozen LM embeddings", "lp": "LM token log-prob stats", "style": "style+tok v2 features"}[args.kind]
     change = (f"{family} ({', '.join(names) + ', ' if names else ''}{Xtr.shape[1]} cols)"
               f"{' + prompt centering' if args.center else ''}"
               f"{' + style+tok v2' + (' (centered too)' if args.center_style else ' (not centered)') if names and args.with_style else ''}"
               f", LogReg C={args.C:g}"
-              f"{'; test-set standardization (held-out fold / test rows scaled by their own mean / std)' if args.test_std else ''}")
+              f"{'; test-set standardization (held-out fold / test rows scaled by their own mean / std)' if args.test_std else ''}"
+              f"{extdata.describe(args)}{'; external rows scaled by their own statistics' if ext is not None and args.ext_scale == 'own' else ''}")
     run_member(tag, change, oof, test, y, folds, t0, note=note, names=names, C=args.C, center=args.center,
                with_style=args.with_style, center_style=args.center_style)
 
