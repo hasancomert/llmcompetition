@@ -543,6 +543,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   sorarım.
 - GPU: S6E10 ile ortak haftalık 30 saat. Bu hafta öncelik S6E10'da. Kota yetmeyecekse LoRA ve gömme işleri haftaya
   kaydırılmadan önce kullanıcıya söylenir.
+- GPU (19 Ekim akşamı, kullanıcı kararı): bu hafta artık GPU yok; kota 24 Ekim Cumartesi sıfırlanınca kullanılabilir. O zamana kadar yalnız CPU işleri: dış veri pasajlarının LM öznitelikleri için GPU işinin ve onları kullanan eğitimin kodu, LoRA hazırlığı. Plan onaylandı.
 - Dış veri yalnız ücretsiz ve herkese açık, yalnız eğitimde; `EXTERNAL_DATA.md`'ye kaynak + lisans. Validation her zaman yarışma katları.
 - Para harcayan, bir şeyi public yapan ya da büyük yön değiştiren her adımdan önce sorulur. Kaggle dataset ve not defterleri private.
 - Kullanılan kod/model lisansları ticari kullanımı kısıtlamamalı; `MODELS_LICENSES.md`'ye yazılır.
