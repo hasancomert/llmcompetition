@@ -103,6 +103,39 @@ def emb_view(spec, y, folds, n_test, Cs, test_std=False):
     return {C: (single_blocks(o), single_blocks(t)) for C, (o, t) in res.items()}
 
 
+def emb_view_primal(spec, tr, te, y, folds, Cs, test_std=False, ext=None, ext_scale="official"):
+    """emb_view with an explicit primal LogReg on the standardized layer blocks (emb_primal.py; same model as the exact
+    Gram LR), so that external rows (extdata.Ext with LM features) can join each family's training set: official
+    training rows of the family + allowed external rows of the family (weights). Held-out / test rows as in emb_view."""
+    from emb_primal import fold_matrices, raw_blocks
+    from sklearn.linear_model import LogisticRegression
+    Xtr, Xte, Xe = raw_blocks(spec, tr, te, ext)
+    groups = tr["prompt_id"].to_numpy()
+    n, n_test = len(y), len(te)
+    res = {C: (np.zeros((n, K)), np.zeros((n_test, K))) for C in Cs}
+    n_f = int(folds.max()) + 1
+    for k in range(n_f):
+        trn_all, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
+        ok = np.flatnonzero(ext.allowed(set(groups[val]))) if ext is not None else None
+        Z_trn, Z_val, Z_te, Z_e = fold_matrices(Xtr, Xte, Xe, trn_all, val, test_std, ok, ext_scale)
+        Z_ev = np.vstack([Z_val, Z_te])
+        for f in MULTI:
+            cols = np.flatnonzero(FAM_OF_CLASS == f)
+            sel = np.isin(y[trn_all], cols)
+            Zf, yf, wf = Z_trn[sel], y[trn_all][sel], np.ones(int(sel.sum()))
+            if ext is not None:
+                es = np.isin(ext.y[ok], cols)
+                Zf, yf, wf = np.vstack([Zf, Z_e[es]]), np.concatenate([yf, ext.y[ok][es]]), np.concatenate([wf, ext.w[ok][es]])
+            for C in Cs:
+                m = LogisticRegression(C=C, max_iter=5000).fit(Zf, yf, sample_weight=wf)
+                pr = m.predict_proba(Z_ev)
+                oof, tst = res[C]
+                oof[np.ix_(val, m.classes_)] = pr[:len(val)]
+                tst[:, m.classes_] += pr[len(val):] / n_f
+        print(f"  fold {k} done (primal{', ' + str(len(ok)) + ' external rows' if ext is not None else ''})", flush=True)
+    return {C: (single_blocks(o), single_blocks(t)) for C, (o, t) in res.items()}
+
+
 def lpstyle_matrix(tr, te):
     from train_emb import load_feats
     from train_gbdt import build
@@ -197,16 +230,24 @@ def main():
     ap.add_argument("--view", required=True)
     ap.add_argument("--test-std", action="store_true", help="emb views: held-out / test rows standardized by own stats")
     ap.add_argument("--Cs", required=True)
+    ap.add_argument("--primal", action="store_true", help="emb views: explicit primal LR (always used with --ext)")
+    ap.add_argument("--ext-scale", default="official", choices=["official", "own"],
+                    help="emb views with --ext: scale external rows with the official training statistics or their own")
     extdata.add_args(ap)
     a = ap.parse_args()
     if a.ext != "none" and not a.view.startswith("ng:"):
-        ap.error("--ext is wired for the ng: view only")
+        if not a.view.startswith("emb:"):
+            ap.error("--ext is wired for the ng: and emb: views only")
     t0 = time.time()
     tr, te = load_train(), load_test()
     y, folds = encode_y(tr["model"]), load_folds(tr)
     Cs = [float(c) for c in a.Cs.split(",")]
     if a.view.startswith("emb:"):
-        res = emb_view(a.view[4:], y, folds, len(te), Cs, a.test_std)
+        ext = extdata.load(a, tr)
+        if ext is not None or a.primal:
+            res = emb_view_primal(a.view[4:], tr, te, y, folds, Cs, a.test_std, ext, a.ext_scale)
+        else:
+            res = emb_view(a.view[4:], y, folds, len(te), Cs, a.test_std)
     elif a.view.startswith("ng:"):
         res = ng_view(a.view[3:], tr, te, y, folds, Cs, extdata.load(a, tr))
     elif a.view == "lpstyle":
@@ -215,7 +256,8 @@ def main():
     else:
         raise SystemExit(f"unknown view {a.view}")
     for C, (oof, test) in res.items():
-        name = save(a.view + extdata.tag_suffix(a) + ("_ts" if a.test_std else ""), C, oof, test)
+        name = save(a.view + extdata.tag_suffix(a) + ("-own" if a.ext != "none" and a.ext_scale == "own" else "")
+                    + ("_ts" if a.test_std else "") + ("_pr" if a.primal and a.ext == "none" else ""), C, oof, test)
         ba, nll, txt = within_family_report(y, oof, name)
         print(f"{txt} | mean in-family BA {ba:.4f} cond NLL {nll:.4f}", flush=True)
     print(f"{time.time() - t0:.0f}s")

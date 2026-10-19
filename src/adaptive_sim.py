@@ -30,6 +30,7 @@ import time
 import numpy as np
 import pandas as pd
 
+import extdata
 from common import K, balance, encode_y, load_folds, load_member, load_test, load_train, log_experiment, metrics
 from emb_kernel import combined_gram
 from emb_raw_explore import parse_blocks
@@ -120,6 +121,52 @@ class Twin:
         return P
 
 
+class TwinPrimal:
+    """Twin with an explicit primal LogReg on centered standardized features (emb_primal.py; same model as Twin), so
+    that external training rows can join, centered within their own prompt blocks, with their weights. The model is
+    linear, so only the scores S = Z W^T of every row are kept: the centered logits of a cluster are S minus the
+    cluster's mean score, plus the intercept (no feature matrix in memory)."""
+
+    def __init__(self, Z_all, trn, ytr, gtr, Cs, Ze=None, ye=None, ge=None, we=None):
+        from emb_primal import group_center as gc
+        from sklearn.linear_model import LogisticRegression
+        Ztr, y, w = gc(Z_all[trn], gtr), ytr, np.ones(len(trn))
+        if Ze is not None:
+            Ztr, y, w = np.vstack([Ztr, gc(Ze, ge)]), np.concatenate([ytr, ye]), np.concatenate([w, we])
+        self.S, self.b, self.cls = {}, {}, {}
+        for C in Cs:
+            m = LogisticRegression(C=C, max_iter=3000).fit(Ztr, y, sample_weight=w)
+            self.S[C], self.b[C], self.cls[C] = Z_all @ m.coef_.T, m.intercept_, m.classes_
+
+    def predict(self, rows, groups, C):
+        lg = group_mean_rows(self.S[C][rows], groups)
+        lg = self.S[C][rows] - lg + self.b[C]
+        lg -= lg.max(1, keepdims=True)
+        P = np.full((len(rows), K), 1e-9)
+        e = np.exp(lg)
+        P[:, self.cls[C]] = e / e.sum(1, keepdims=True)
+        return P
+
+
+def primal_twins(view, tr, te, y, folds, prompts, Cs, ext=None, ext_scale="official"):
+    """{fold: TwinPrimal} of one LM view; per fold the official training statistics standardize every row
+    (as emb_kernel.grams), external rows allowed for the fold (leak filter) join the training set."""
+    from emb_primal import raw_blocks, scale, train_stats
+    Xtr, Xte, Xe = raw_blocks(view, tr, te, ext)
+    X_all = np.vstack([Xtr, Xte])
+    out = {}
+    for k in range(int(folds.max()) + 1):
+        trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
+        mu, sd = train_stats(Xtr[trn])
+        kw = {}
+        if ext is not None:
+            ok = np.flatnonzero(ext.allowed(set(prompts[val])))
+            Ze = scale(Xe[ok], *(train_stats(Xe[ok]) if ext_scale == "own" else (mu, sd)))
+            kw = dict(Ze=Ze, ye=ext.y[ok], ge=ext.df["prompt_group_id"].to_numpy()[ok], we=ext.w[ok])
+        out[k] = TwinPrimal(scale(X_all, mu, sd), trn, y[trn], prompts[trn], Cs, **kw)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plain", default="famcsup6_l12", help="saved OOF member = the plain pipeline")
@@ -134,6 +181,8 @@ def main():
     ap.add_argument("--min-size", type=int, default=2)
     ap.add_argument("--max-size", type=int, default=18)
     ap.add_argument("--balance", default="", help="Sinkhorn balancing strengths alpha (comma-separated; empty: none)")
+    ap.add_argument("--primal", action="store_true", help="LM twins as explicit primal LR (TwinPrimal)")
+    ap.add_argument("--ext-scale", default="official", choices=["official", "own"])
     ap.add_argument("--bucket-w", default="", help="';'-separated twin weights by cluster size, 'w2/w3-4/w5+' (e.g. "
                     "0.25/0.5/0.75); columns C<C>_s<w2>-<w34>-<w5>")
     ap.add_argument("--ng-views", default="", help="n-gram twin views, ';'-separated stream sets (e.g. char+word+fw+shapew)")
@@ -141,6 +190,7 @@ def main():
     ap.add_argument("--ng-weights", default="0.25,0.5", help="weight grid of the n-gram twin evidence")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log", default="", help="EXPERIMENTS.md tag prefix (empty: no rows)")
+    extdata.add_args(ap)
     a = ap.parse_args()
     t0 = time.time()
     tr, te = load_train(), load_test()
@@ -161,12 +211,17 @@ def main():
         Emix = X[:, int(li) * w:(int(li) + 1) * w].astype(np.float64)
         print(f"mixed clustering: TF-IDF + {nm} layer {meta['layers'][int(li)]} (cut {a.thr})", flush=True)
     twins = {}
+    ext = extdata.load(a, tr)
     for v in views:
-        blocks = parse_blocks(v)
-        for k in range(n_f):
-            Kfull = combined_gram(blocks, folds, k, n_test)
-            trn = np.flatnonzero(folds != k)
-            twins[v, k] = Twin(Kfull, trn, y[trn], prompts[trn], Cs)
+        if a.primal or ext is not None:              # external rows: primal twins (the Gram would be too large)
+            for k, tw in primal_twins(v, tr, te, y, folds, prompts, Cs, ext, a.ext_scale).items():
+                twins[v, k] = tw
+        else:
+            blocks = parse_blocks(v)
+            for k in range(n_f):
+                Kfull = combined_gram(blocks, folds, k, n_test)
+                trn = np.flatnonzero(folds != k)
+                twins[v, k] = Twin(Kfull, trn, y[trn], prompts[trn], Cs)
         print(f"twin {v}: 5 folds ({time.time() - t0:.0f}s)", flush=True)
     ng_views = [v for v in a.ng_views.split(";") if v]
     ng_Cs = [float(c) for c in a.ng_C.split(",")]
