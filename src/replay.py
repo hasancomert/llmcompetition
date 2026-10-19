@@ -147,9 +147,11 @@ RECIPES = {
            "twins": {"twins_l12": 0.5},
            "cv": 0.4719},
     "v7": {"needs_lm": True, "lm_extra": LM_L12,
-           "steps": ["charword_pub", "svc_pub", "lp4", "emb4_l12_ts", "emb8_l12_ts", "ng_fw_pub",
-                     "spec_super_e8_l12_ts", "spec_super_e4_l12_ts", "spec_super_lps", "spec_super_ng", "famc_super_v7",
-                     "twins_l12"],
+           # same steps as a sequential list, run in 3 stages (4 CPUs): ~half the wall time of the sequential order
+           "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"]],
+                      [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                         "spec_super_ng@1", "twins_l12@1"]],
+                      [["famc_super_v7"]]],
            "weights": {"famcsup6_l12_pub03_ts": 1.0},
            "twins": {"twins_l12": 0.5},
            "cv": 0.4871},
@@ -246,12 +248,14 @@ def find_pub_dir(spec: str) -> str:
     return "/kaggle/input" if glob.glob("/kaggle/input/**/passages_clean.csv", recursive=True) else ""
 
 
-def run_step(key, t0, extra=(), pub_dir=""):
+def run_step(key, t0, extra=(), pub_dir="", threads=None):
     env_over, script, args = STEPS[key]
     args = list(args) + list(extra)
     if pub_dir and "pub" in args and "--ext" in args:
         args += ["--ext-dir", pub_dir]
     env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), NLLM_KGRAM_CACHE="0", **env_over)
+    if threads:                                     # steps running side by side (recipe stages): fixed thread budgets
+        env.update(OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads), MKL_NUM_THREADS=str(threads))
     r = subprocess.run([sys.executable, str(HERE / script), *args], cwd=str(HERE), env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     tail = "\n".join(l for l in r.stdout.splitlines() if l.startswith("[") or "Error" in l or "Traceback" in l)[-1500:]
@@ -259,6 +263,32 @@ def run_step(key, t0, extra=(), pub_dir=""):
         print(r.stdout[-4000:], flush=True)
         raise RuntimeError(f"step {key} ({script}) failed with exit {r.returncode}")
     log(f"step {key}: {script} {' '.join(args)[:120]} -> ok\n{tail}", t0)
+
+
+def run_stages(stages, t0, ext_args, pub_dir):
+    """Recipe stages: the chains of a stage run side by side (each chain's steps in order), stages one after the other.
+    A chain entry is 'step' or 'step@threads' (OMP / BLAS threads of that step). Steps only exchange files through
+    outputs/, so independent members can run concurrently; the first failure is re-raised after the stage."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def chain(entries):
+        for e in entries:
+            key, _, th = e.partition("@")
+            run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir, int(th) if th else None)
+    for i, stage in enumerate(stages):
+        with ThreadPoolExecutor(len(stage)) as ex:
+            futs = [ex.submit(chain, c) for c in stage]
+            errs = [f.exception() for f in futs]
+        if any(errs):
+            raise next(e for e in errs if e)
+        log(f"stage {i + 1}/{len(stages)} done", t0)
+
+
+def recipe_steps(rec):
+    """Step keys of a recipe in run order (sequential 'steps' or the chains of 'stages')."""
+    if "stages" in rec:
+        return [e.partition("@")[0] for stage in rec["stages"] for c in stage for e in c]
+    return list(rec["steps"])
 
 
 def main():
@@ -290,11 +320,13 @@ def main():
     tr, te = setup_project(a, t0)
     pub_dir = find_pub_dir(a.pub_dir)
     try:
-        if any("pub" in STEPS[k][2] for k in rec["steps"]):
+        if any("pub" in STEPS[k][2] for k in recipe_steps(rec)):
             log(f"public generated passages read from {pub_dir or 'data/external/pub (local)'}", t0)
         if rec["needs_lm"]:
             setup_lm(a, tr, te, t0, rec.get("lm_extra", ()))
-        for key in rec["steps"]:
+        if "stages" in rec:
+            run_stages(rec["stages"], t0, ext_args, pub_dir)
+        for key in rec.get("steps", []):
             run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir)
         from common import CLASSES, K, encode_y, load_member, metrics
         import submission as sub_check  # reuse/airline/submission.py
