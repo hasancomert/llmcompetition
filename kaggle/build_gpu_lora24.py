@@ -9,7 +9,10 @@ Usage (repo root):
   python kaggle/build_gpu_lora24.py --slug nllm-lora24 [--push]                       GPU run (8B, all 6 jobs)
   python kaggle/build_gpu_lora24.py --slug nllm-lora24-smoke --smoke [--push]         CPU smoke (0.6B, tiny)
   python kaggle/build_gpu_lora24.py --slug nllm-lora24 --fetch
+  python kaggle/build_gpu_lora24.py --slug nllm-lora24-infer-smoke --infer-from nllm-lora24-smoke [--push]
+      CPU smoke of lora24_infer.py on the smoke run's job f0 (anchor parity, test features)
 """
+import json
 import argparse
 import shutil
 import subprocess
@@ -26,6 +29,7 @@ if __name__ == "__main__":
     ap.add_argument("--hint", default="8b-base")
     ap.add_argument("--args", default="--jobs f0,f1,f2,f3,f4,final --epochs 3")
     ap.add_argument("--smoke", action="store_true", help="CPU kernel, 0.6B, 6 prompts, 1 epoch, 12 layers, job f0")
+    ap.add_argument("--infer-from", default="", help="CPU inference smoke on the output of this (smoke) kernel")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--fetch", action="store_true")
     a = ap.parse_args()
@@ -38,6 +42,25 @@ if __name__ == "__main__":
         print("fetched into", d)
         sys.exit(0)
     hint, args, env = a.hint, a.args, ""
+    if a.infer_from:
+        d = kaggle_runner.build(
+            build, a.slug, "hasancmert",
+            code_files={f"src/{f}": ROOT / "src" / f for f in ("gpu_lora.py", "gpu_lora24.py", "lora24_infer.py")},
+            commands=["find /kaggle/input -maxdepth 4 | head -40; "
+                      "python src/lora24_infer.py --model-dir $(dirname $(find /kaggle/input -path '*0.6b-base*' "
+                      "-name config.json | head -1)) --jobs-dir $(dirname $(find /kaggle/input -type d -path '*lora24/f0' "
+                      "| head -1)) --jobs f0 --texts $(find /kaggle/input -name test.csv | grep name-that-llm | head -1) "
+                      "--train $(find /kaggle/input -name train.csv | grep name-that-llm | head -1) "
+                      "--out /kaggle/working/lora24_feats --n-layers 12 --max-len 128 --device cpu"],
+            competition="name-that-llm", datasets=[], models=["qwen-lm/qwen-3/transformers/0.6b-base/1"],
+            out_dirs=(), gpu=False, internet=False, machine_shape=None)
+        meta = json.loads((d / "kernel-metadata.json").read_text())
+        meta["kernel_sources"] = [f"hasancmert/{a.infer_from}"]
+        (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1))
+        print("built", d)
+        if a.push:
+            kaggle_runner.push(d)
+        sys.exit(0)
     if a.smoke:
         hint, args = "0.6b-base", "--jobs f0 --limit 6 --epochs 1 --n-layers 12 --max-len 128"
         env = "LORA24_DEVICE=cpu "
