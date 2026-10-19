@@ -1,0 +1,277 @@
+"""LoRA24 on the shared folds: a re-implementation (written anew, not copied) of the public two-head 24-layer recipe
+(lightningv08, "NTL LoRA24 Fivefold Training", Kaggle notebook, Apache 2.0).
+
+Model: a Qwen3 base LM truncated to its first 24 decoder layers (fp16 on one GPU per job, gradient checkpointing), LoRA
+r16 / alpha 32 / dropout 0.05 on q, k, v, o, gate, up, down. Hidden states of layers 2, 4, 6, 8, 12, 16, 20, 24 are
+mean-pooled (attention mask, first token excluded), each through its own LayerNorm (fp32), and concatenated
+(8 x hidden). Two linear heads on the pooled vector z (dropout 0.1): plain(z) and centered(z - mean of z over the
+batch's same-prompt triple); loss = CE(plain) + CE(centered). The centered head is the LoRA's own prompt-centered twin.
+
+Training: every epoch covers every fitting answer once in same-prompt triples (an incomplete last triple is filled
+with other answers of that prompt), 6 triples per update (effective batch 18), 3 epochs, AdamW (adapter 1e-4,
+heads 1e-3, weight decay 0.01), 10% linear warmup then cosine decay, fp16 autocast with a grad scaler (start 256, no
+growth; an update whose gradients overflow is redone with half the scale, at most 3 times), gradient clipping 1.0.
+Fixed epochs: held-out labels never select anything.
+
+Jobs: f0..f4 (fit = rows of the other folds, held out = fold k) and 'final' (all rows). Outputs in <out>/<job>/:
+adapter/ (peft), heads.pt (norms + plain + centered state dicts), readouts.npz (head weights as numpy, pooled layers),
+valid_features.npy (float16, held-out rows) + valid_idx.npy (their train row numbers), anchor_features.npy (train rows
+0..2, for the inference parity check), log.json. --worker w --workers n runs jobs[w::n] (one process per GPU).
+
+Usage: python gpu_lora24.py --model-dir D --train train.csv --folds-csv folds.csv --jobs f0,f1,f2,f3,f4,final
+       [--worker 0 --workers 2] [--out lora24]       smoke: --device cpu --limit 72 --epochs 1 --n-layers 12
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gpu_lora import CLASSES, disable_torchao_check  # noqa: E402
+
+POOL_LAYERS = [2, 4, 6, 8, 12, 16, 20, 24]
+TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+
+def tokenize(tok, texts, max_len):
+    ids = tok(list(texts), add_special_tokens=False, truncation=True, max_length=max_len)["input_ids"]
+    return [x + [tok.eos_token_id] for x in ids]
+
+
+def epoch_triples(fit, groups, rng):
+    """One epoch: every fitting row once, in same-prompt triples (a short last triple is filled with other rows of
+    the prompt), triples shuffled, then padded with repeats to a multiple of 6 (one update = 6 triples)."""
+    out = []
+    for g in np.unique(groups[fit]):
+        members = rng.permutation(fit[groups[fit] == g])
+        assert len(members) >= 3, f"prompt {g} has fewer than 3 fitting rows"
+        for s in range(0, len(members), 3):
+            t = members[s:s + 3]
+            if len(t) < 3:
+                t = np.concatenate([t, rng.choice(np.setdiff1d(members, t), 3 - len(t), replace=False)])
+            out.append(t)
+    out = [out[i] for i in rng.permutation(len(out))]
+    n = len(out)
+    while len(out) % 6:
+        out.append(out[int(rng.integers(n))].copy())
+    return out
+
+
+class Lora24:
+    """Truncated trunk + LoRA + per-layer LayerNorms + plain / centered heads."""
+
+    def __init__(self, model_dir, n_layers, pool_layers, device, dtype, r=16, alpha=32, train=True):
+        import torch
+        from peft import LoraConfig, get_peft_model
+        from transformers import AutoConfig, AutoModel, AutoTokenizer
+        disable_torchao_check()
+        self.torch, self.device, self.layers = torch, device, list(pool_layers)
+        self.tok = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        self.tok.padding_side = "right"
+        if self.tok.pad_token is None:
+            self.tok.pad_token = self.tok.eos_token
+        cfg = AutoConfig.from_pretrained(model_dir, local_files_only=True)
+        cfg.num_hidden_layers, cfg.use_cache = n_layers, False
+        if getattr(cfg, "layer_types", None) is not None:
+            cfg.layer_types = cfg.layer_types[:n_layers]
+        kw = dict(config=cfg, dtype=dtype, local_files_only=True, low_cpu_mem_usage=True)
+        if device.type == "cuda":
+            kw.update(device_map={"": device.index or 0}, attn_implementation="sdpa")
+        base = AutoModel.from_pretrained(model_dir, **kw)
+        if device.type != "cuda":                       # cuda: already placed by device_map
+            base = base.to(device)
+        base.requires_grad_(False)
+        H = cfg.hidden_size
+        self.hidden = H
+        if train:
+            self.model = get_peft_model(base, LoraConfig(r=r, lora_alpha=alpha, lora_dropout=0.05, bias="none",
+                                                         target_modules=TARGETS))
+            self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            self.model.enable_input_require_grads()
+            for p in self.model.parameters():
+                if p.requires_grad:
+                    p.data = p.data.float()
+        else:
+            self.model = base
+        nn = torch.nn
+        self.norms = nn.ModuleList([nn.LayerNorm(H) for _ in self.layers]).to(device).float()
+        self.plain = nn.Linear(H * len(self.layers), len(CLASSES)).to(device).float()
+        self.centered = nn.Linear(H * len(self.layers), len(CLASSES)).to(device).float()
+        self.dropout = nn.Dropout(0.1)
+
+    def pooled(self, ids_batch):
+        """(n, 8 * H) fp32 pooled vectors of a list of token id lists."""
+        torch = self.torch
+        b = self.tok.pad({"input_ids": ids_batch}, return_tensors="pt").to(self.device)
+        with torch.autocast(self.device.type, dtype=torch.float16, enabled=self.device.type == "cuda"):
+            hs = self.model(**b, output_hidden_states=True, use_cache=False).hidden_states
+        m = b["attention_mask"].unsqueeze(-1).float()
+        m[:, 0] = 0
+        with torch.autocast(self.device.type, enabled=False):
+            z = torch.cat([norm((hs[li].float() * m).sum(1) / m.sum(1).clamp(min=1))
+                           for li, norm in zip(self.layers, self.norms)], -1)
+        assert bool(torch.isfinite(z).all()), "non-finite pooled features"
+        return z, int(b["attention_mask"].sum())
+
+    def loss(self, ids_batch, y):
+        torch = self.torch
+        z, n_tok = self.pooled(ids_batch)
+        yt = torch.as_tensor(y, device=self.device, dtype=torch.long)
+        with torch.autocast(self.device.type, enabled=False):
+            lp = torch.nn.functional.cross_entropy(self.plain(self.dropout(z)), yt)
+            lc = torch.nn.functional.cross_entropy(self.centered(self.dropout(z - z.mean(0, keepdim=True))), yt)
+        return lp + lc, float(lp.detach()), float(lc.detach()), n_tok
+
+    def features(self, ids, bs=3):
+        """Eval-mode pooled vectors (float32 numpy) of every token id list, length-sorted batches."""
+        torch = self.torch
+        out = np.zeros((len(ids), self.hidden * len(self.layers)), np.float32)
+        order = np.argsort([len(x) for x in ids], kind="stable")
+        with torch.inference_mode():
+            for s in range(0, len(order), bs):
+                idx = order[s:s + bs]
+                out[idx] = self.pooled([ids[i] for i in idx])[0].cpu().numpy()
+        return out
+
+
+def run_job(a, name, ids, y, groups, folds):
+    import torch
+    fit = np.flatnonzero(folds != int(name[1:])) if name != "final" else np.arange(len(y))
+    valid = np.flatnonzero(folds == int(name[1:])) if name != "final" else np.zeros(0, int)
+    assert not set(groups[fit]) & set(groups[valid]), "prompt overlap between fit and held-out rows"
+    out = Path(a.out) / name
+    assert not (out / "COMPLETE.json").exists(), f"{out} already complete (no silent re-use)"
+    out.mkdir(parents=True, exist_ok=True)
+    torch.manual_seed(a.seed)
+    np.random.seed(a.seed)
+    rng = np.random.default_rng(a.seed)
+    plan = [epoch_triples(fit, groups, rng) for _ in range(a.epochs)]
+    total = sum(len(p) // 6 for p in plan)
+    device = torch.device(a.device if a.device == "cpu" else "cuda:0")
+    t0 = time.time()
+    net = Lora24(a.model_dir, a.n_layers, [l for l in POOL_LAYERS if l <= a.n_layers], device,
+                 torch.float16 if device.type == "cuda" else torch.float32)
+    print(f"[{name}] loaded in {time.time() - t0:.0f}s; fit {len(fit)} rows, held out {len(valid)}, "
+          f"{total} updates", flush=True)
+    adapter = [p for p in net.model.parameters() if p.requires_grad]
+    heads = list(net.norms.parameters()) + list(net.plain.parameters()) + list(net.centered.parameters())
+    params = adapter + heads
+    opt = torch.optim.AdamW([{"params": adapter, "lr": a.lr}, {"params": heads, "lr": a.head_lr}], weight_decay=0.01)
+    warm = max(1, int(0.1 * total))
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: (s + 1) / warm if s < warm else
+                                              0.5 * (1 + math.cos(math.pi * min(1.0, (s - warm) / max(1, total - warm)))))
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", init_scale=256.0, growth_interval=1_000_000, enabled=use_amp)
+    log = {"job": name, "fit_rows": int(len(fit)), "valid_rows": int(len(valid)), "updates": total, "epochs": a.epochs,
+           "n_layers": a.n_layers, "pool_layers": net.layers, "max_len": a.max_len, "lr": a.lr, "head_lr": a.head_lr,
+           "seed": a.seed, "history": [], "overflow_retries": 0}
+    net.model.train()
+    net.norms.train()
+    net.plain.train()
+    net.centered.train()
+    step, t1 = 0, time.time()
+    for ep, triples in enumerate(plan):
+        for s in range(0, len(triples), 6):
+            group = triples[s:s + 6]
+            for attempt in range(4):                 # redo an overflowing update with half the scale (<= 3 times)
+                opt.zero_grad(set_to_none=True)
+                stats = []
+                for t in group:
+                    loss, lp, lc, n_tok = net.loss([ids[i] for i in t], y[t])
+                    scaler.scale(loss / len(group)).backward()
+                    stats.append((lp, lc, n_tok))
+                if use_amp:
+                    scaler.unscale_(opt)
+                    finite = all(p.grad is None or bool(torch.isfinite(p.grad).all()) for p in params)
+                    if not finite:
+                        log["overflow_retries"] += 1
+                        assert attempt < 3, f"update {step + 1}: overflow after 3 retries"
+                        scaler.update(new_scale=scaler.get_scale() * 0.5)
+                        continue
+                gn = float(torch.nn.utils.clip_grad_norm_(params, 1.0))
+                scaler.step(opt)
+                scaler.update()
+                break
+            sched.step()
+            step += 1
+            if step % 10 == 0 or step == total:
+                h = {"step": step, "epoch": ep + 1, "plain": float(np.mean([x[0] for x in stats])),
+                     "center": float(np.mean([x[1] for x in stats])), "grad_norm": gn,
+                     "seconds": round(time.time() - t1, 1)}
+                log["history"].append(h)
+                print(f"[{name}] {json.dumps(h)}", flush=True)
+    log["train_seconds"] = round(time.time() - t1, 1)
+    net.model.eval()
+    net.norms.eval()
+    net.plain.eval()
+    net.centered.eval()
+    if hasattr(net.model, "gradient_checkpointing_disable"):
+        net.model.gradient_checkpointing_disable()
+    if len(valid):
+        Z = net.features([ids[i] for i in valid])
+        np.save(out / "valid_features.npy", Z.astype(np.float16))
+        np.save(out / "valid_idx.npy", valid)
+    np.save(out / "anchor_features.npy", net.features([ids[i] for i in range(3)]))
+    np.savez(out / "readouts.npz", classes=np.array(CLASSES), pool_layers=np.array(net.layers),
+             plain_coef=net.plain.weight.detach().cpu().numpy(), plain_intercept=net.plain.bias.detach().cpu().numpy(),
+             center_coef=net.centered.weight.detach().cpu().numpy(),
+             center_intercept=net.centered.bias.detach().cpu().numpy())
+    net.model.save_pretrained(out / "adapter")
+    torch.save({"norms": net.norms.state_dict(), "plain": net.plain.state_dict(),
+                "centered": net.centered.state_dict()}, out / "heads.pt")
+    if device.type == "cuda":
+        log["peak_gib"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
+    log["total_seconds"] = round(time.time() - t0, 1)
+    (out / "log.json").write_text(json.dumps(log, indent=1))
+    (out / "COMPLETE.json").write_text(json.dumps({"job": name, "updates": step}))
+    print(f"[{name}] COMPLETE in {log['total_seconds']}s", flush=True)
+    del net, opt, scaler
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model-dir", required=True)
+    ap.add_argument("--train", required=True)
+    ap.add_argument("--folds-csv", required=True)
+    ap.add_argument("--jobs", default="f0,f1,f2,f3,f4,final")
+    ap.add_argument("--worker", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--out", default="lora24")
+    ap.add_argument("--n-layers", type=int, default=24)
+    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--head-lr", type=float, default=1e-3)
+    ap.add_argument("--max-len", type=int, default=447)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    ap.add_argument("--limit", type=int, default=0, help="SMOKE TEST ONLY: keep the first N prompts' rows")
+    a = ap.parse_args()
+    tr = pd.read_csv(a.train)
+    fd = pd.read_csv(a.folds_csv)
+    assert (fd["id"].values == tr["id"].values).all(), "folds.csv does not match train.csv row order"
+    if a.limit:
+        keep = tr["prompt_id"].isin(tr["prompt_id"].drop_duplicates().iloc[:a.limit])
+        tr, fd = tr[keep].reset_index(drop=True), fd[keep].reset_index(drop=True)
+    y = tr["model"].map({c: i for i, c in enumerate(CLASSES)}).to_numpy()
+    groups, folds = tr["prompt_id"].astype(str).to_numpy(), fd["fold"].to_numpy()
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(a.model_dir, local_files_only=True)
+    ids = tokenize(tok, tr["text"].tolist(), a.max_len)
+    jobs = a.jobs.split(",")[a.worker::a.workers]
+    print(f"worker {a.worker}/{a.workers}: jobs {jobs}; {len(tr)} rows", flush=True)
+    for name in jobs:
+        run_job(a, name, ids, y, groups, folds)
+
+
+if __name__ == "__main__":
+    main()
