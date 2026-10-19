@@ -134,6 +134,8 @@ def main():
     ap.add_argument("--min-size", type=int, default=2)
     ap.add_argument("--max-size", type=int, default=18)
     ap.add_argument("--balance", default="", help="Sinkhorn balancing strengths alpha (comma-separated; empty: none)")
+    ap.add_argument("--bucket-w", default="", help="';'-separated twin weights by cluster size, 'w2/w3-4/w5+' (e.g. "
+                    "0.25/0.5/0.75); columns C<C>_s<w2>-<w34>-<w5>")
     ap.add_argument("--ng-views", default="", help="n-gram twin views, ';'-separated stream sets (e.g. char+word+fw+shapew)")
     ap.add_argument("--ng-C", default="10,30", help="C grid of the n-gram twins")
     ap.add_argument("--ng-weights", default="0.25,0.5", help="weight grid of the n-gram twin evidence")
@@ -208,8 +210,12 @@ def main():
                             L[loc] += np.log(np.clip(P[[pos[r] for r in loc]], 1e-9, 1))
                 return L
             L_ng = {nC: evidence(ng_views, nC) for nC in ng_Cs} if ng_views else {}
+            buckets = [tuple(float(x) for x in t.split("/")) for t in a.bucket_w.split(";") if t]
             for C in Cs:
                 L = evidence(views, C)
+                for bw in buckets:                           # weight by the size of the text's cluster
+                    wrow = np.where(sizes == 2, bw[0], np.where(sizes <= 4, bw[1], bw[2]))
+                    res[f"C{C:g}_s{bw[0]:g}-{bw[1]:g}-{bw[2]:g}"] = ba(lp + wrow[:, None] * L)
                 for w in ws:
                     z = lp + w * L
                     res[f"C{C:g}_w{w:g}"] = ba(z)
