@@ -366,6 +366,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - `nllm-submit-gpu` v4 (v6, 18 Ekim): 21:33–22:28, ~0.9 sa. Toplam ~4.1 sa. S6E10 bu hafta GPU kullanmadı (18 Ekim 22:00'de kernel listesi).
     - `nllm-submit-gpu` v5 (v7, 19 Ekim): 10:59 UTC'de push'landı. Kullanıcı onayı (19 Ekim): "Şimdi gönder". Tahmin ~0.8 sa (paralel aşamalar); v7 sonrası S6E10'a ~25 sa kalıyor (planlı 23.6 sa).
     - 19 Ekim 13:00 UTC: v7 hâlâ Kaggle kuyruğunda (QUEUED, 10:59'dan beri). S6E10 oturumu `s6e10-pfn15-og-s1a`'yı 11:11'de başlattı (RUNNING; s1b henüz yok). Kuyrukta beklemek kotadan düşmüyor; 8B modeli tek P100'e sığmadığı için T4×2 bekleniyor.
+    - v7 kuyruktan 15:01'den sonra çıktı, 19:34'te COMPLETE. Notebook içi süre 3.362 sn (~1.0 GPU-saat; Kaggle CPU'ları yerelden ~2.3× yavaş: 1. aşama 1.797 sn, yerelde 770). Hafta toplamı NLLM ~5.1 sa. v7 19:35'te gönderildi.
   - LoRA probe2 sonucu:
     - Tek başına zayıf: 2 fold'da 0.4085; dondurulmuş 4B gömmeleri 0.4354.
     - Ama tamamlayıcı (EXPERIMENTS satır 493).
