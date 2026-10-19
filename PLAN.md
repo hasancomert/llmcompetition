@@ -327,8 +327,9 @@ GPU bütçesi:
      dış veriyle 0.4719 → 0.4831. Ek veri dalı ana dala birleştirildi (`featherless-extra-data`, 18 Ekim).
   3. Sinkhorn: nötr ya da olumsuz, benimsenmedi. Test standartlaştırma: tek üyede tam fold'da +0.006 / +0.010;
      yığın düzeyinde CV sürüyor.
-  4. Sırada v7: v6 + dış veriyle CPU üyeleri (+ CV olumluysa test standartlaştırma). Yerel uçtan uca replay'den sonra
-     push'lanacak. Not defteri süresi ~1.8 GPU-saat (CPU üyeleri dış veriyle ~40 dk uzuyor).
+  4. v6 public LB 0.479 (v5 0.435). v7 = v6 + dış veriyle CPU üyeleri + LM girdilerinde test standartlaştırma
+     (birleştirici CV 0.4719 → 0.4871). Yerel replay'de notebook içi OOF 0.4871. Replay artık paralel aşamalarla
+     koşuyor (süre yarıya indi). 19 Ekim 10:59'da push'landı.
 
 ### GPU planı: 17–24 Ekim haftası (kota 30 saat; kullanıcı kararı: öncelik S6E10)
 
@@ -363,6 +364,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Gizli test için yeniden koşma kotadan düşmüyor.
     - `nllm-gpu-embed-e18` v1 (8B/4B, katman 1–18): 09:02–09:18, ~0.27 sa. Toplam ~3.2 sa.
     - `nllm-submit-gpu` v4 (v6, 18 Ekim): 21:33–22:28, ~0.9 sa. Toplam ~4.1 sa. S6E10 bu hafta GPU kullanmadı (18 Ekim 22:00'de kernel listesi).
+    - `nllm-submit-gpu` v5 (v7, 19 Ekim): 10:59 UTC'de push'landı. Kullanıcı onayı (19 Ekim): "Şimdi gönder". Tahmin ~0.8 sa (paralel aşamalar); v7 sonrası S6E10'a ~25 sa kalıyor (planlı 23.6 sa).
   - LoRA probe2 sonucu:
     - Tek başına zayıf: 2 fold'da 0.4085; dondurulmuş 4B gömmeleri 0.4354.
     - Ama tamamlayıcı (EXPERIMENTS satır 493).
