@@ -544,6 +544,18 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
 - GPU: S6E10 ile ortak haftalık 30 saat. Bu hafta öncelik S6E10'da. Kota yetmeyecekse LoRA ve gömme işleri haftaya
   kaydırılmadan önce kullanıcıya söylenir.
 - GPU (19 Ekim akşamı, kullanıcı kararı): bu hafta artık GPU yok; kota 24 Ekim Cumartesi sıfırlanınca kullanılabilir. O zamana kadar yalnız CPU işleri: dış veri pasajlarının LM öznitelikleri için GPU işinin ve onları kullanan eğitimin kodu, LoRA hazırlığı. Plan onaylandı.
+- 24 Ekim sonrası GPU planı (hazır kod; her GPU işi için kullanıcıya sorulacak):
+  1. `nllm-gpu-embed-ext` (hazır, push'lanmadı): 7.700 public pasajın LM öznitelikleri. 0.6B / 1.7B 4 katman, 4B / 8B
+     12 katman. Tahmin ~0.6–0.8 GPU-saat. Sonra CPU'da: dış veriyle LM üyeleri (`train_emb --ext pub`), uzmanlar
+     (`family_spec --ext pub`, primal), dış veri bloklarıyla ikizler (`adaptive_sim --ext pub`, TwinPrimal).
+  2. LoRA24 (`kaggle/build_gpu_lora24.py`, `src/gpu_lora24.py`): public iki başlı 24 katmanlı tarifin yeniden yazımı
+     (Qwen3-8B ilk 24 katman, LoRA r16, 8 havuz katmanı + LayerNorm, düz + prompt merkezli baş, aynı prompt'tan
+     üçlüler, 3 epoch). 5 fold + final, iki T4'te 3'er iş. Public ölçüme göre ~3 sa/iş, toplam **~9–10 GPU-saat**.
+     - CPU duman testleri geçti (19 Ekim): eğitim (0.6B, 12 katman, 6 prompt, 1 epoch; çıktıların hepsi) ve çıkarım
+       (`lora24_infer.py`; çapa eşleşmesi birebir). GPU'nun fp16 + ölçekleyici yolu yalnız gerçek koşuda denenecek.
+     - Replay için: `lora24_infer.py` (test öznitelikleri), `lora24_member.py` (OOF üyesi ve merkezli ikiz kanıtı).
+  3. Alternatif (kullanıcı kararı gerekir): lightningv08'in public LoRA24 checkpoint'i (eğitim maliyeti yok; başka bir
+     katılımcının modeli, OOF'u onların fold'larında; lisans kontrolü gerekir).
 - Dış veri yalnız ücretsiz ve herkese açık, yalnız eğitimde; `EXTERNAL_DATA.md`'ye kaynak + lisans. Validation her zaman yarışma katları.
 - Para harcayan, bir şeyi public yapan ya da büyük yön değiştiren her adımdan önce sorulur. Kaggle dataset ve not defterleri private.
 - Kullanılan kod/model lisansları ticari kullanımı kısıtlamamalı; `MODELS_LICENSES.md`'ye yazılır.
