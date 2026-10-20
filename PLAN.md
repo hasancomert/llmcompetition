@@ -544,13 +544,18 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
 - GPU: S6E10 ile ortak haftalık 30 saat. Bu hafta öncelik S6E10'da. Kota yetmeyecekse LoRA ve gömme işleri haftaya
   kaydırılmadan önce kullanıcıya söylenir.
 - GPU (19 Ekim akşamı, kullanıcı kararı): bu hafta artık GPU yok; kota 24 Ekim Cumartesi sıfırlanınca kullanılabilir. O zamana kadar yalnız CPU işleri: dış veri pasajlarının LM öznitelikleri için GPU işinin ve onları kullanan eğitimin kodu, LoRA hazırlığı. Plan onaylandı.
-- 24 Ekim sonrası GPU planı (hazır kod; her GPU işi için kullanıcıya sorulacak):
+- GPU bütçesi, 24–30 Ekim haftası (kullanıcı kararı, 20 Ekim): S6E10 ~23 saat kullanacak; NLLM'e ~7 GPU-saat kalıyor. Bu bütçe içinde serbestim. Plan:
+  1. Dış veri pasajlarının LM öznitelikleri (`nllm-gpu-embed-ext`, ~0.7 sa) → CPU'da dış veriyle LM üyeleri, uzmanlar, ikizler (CV).
+  2. LoRA24 8B, 5 fold + final (`nllm-lora24`), sert süre sınırı 5 sa (`LORA24_BUDGET_H`). Tahmin ~4.5 sa: probe2'nin ölçümünden ölçeklendi (4B, 27 katman, 4 epoch: fold başına ~1 sa).
+  3. CV kazancı varsa birleşik gönderim (v8, ~1.3 sa). Toplam ~6.5 sa.
+  - S6E10 iki GPU slotunu doldurursa NLLM işleri slot boşalınca push'lanır.
+- 24 Ekim sonrası GPU planı (hazır kod):
   1. `nllm-gpu-embed-ext` (hazır, push'lanmadı): 7.700 public pasajın LM öznitelikleri. 0.6B / 1.7B 4 katman, 4B / 8B
      12 katman. Tahmin ~0.6–0.8 GPU-saat. Sonra CPU'da: dış veriyle LM üyeleri (`train_emb --ext pub`), uzmanlar
      (`family_spec --ext pub`, primal), dış veri bloklarıyla ikizler (`adaptive_sim --ext pub`, TwinPrimal).
   2. LoRA24 (`kaggle/build_gpu_lora24.py`, `src/gpu_lora24.py`): public iki başlı 24 katmanlı tarifin yeniden yazımı
      (Qwen3-8B ilk 24 katman, LoRA r16, 8 havuz katmanı + LayerNorm, düz + prompt merkezli baş, aynı prompt'tan
-     üçlüler, 3 epoch). 5 fold + final, iki T4'te 3'er iş. Public ölçüme göre ~3 sa/iş, toplam **~9–10 GPU-saat**.
+     üçlüler, 3 epoch). 5 fold + final, iki T4'te 3'er iş. Public notebook'un üst sınırı ~10 sa; probe2'den ölçeklenen tahmin ~1.4 sa/iş, toplam **~4.5 GPU-saat** (5 sa sert sınırla).
      - CPU duman testleri geçti (19 Ekim): eğitim (0.6B, 12 katman, 6 prompt, 1 epoch; çıktıların hepsi) ve çıkarım
        (`lora24_infer.py`; çapa eşleşmesi birebir). GPU'nun fp16 + ölçekleyici yolu yalnız gerçek koşuda denenecek.
      - Replay için: `lora24_infer.py` (test öznitelikleri), `lora24_member.py` (OOF üyesi ve merkezli ikiz kanıtı).

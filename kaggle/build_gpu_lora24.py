@@ -2,8 +2,10 @@
 5 fold jobs + 'final' over two T4 workers (one job per GPU at a time), internet off, Qwen3 base model mounted from
 Kaggle Models, folds from the private dataset nllm-folds. Outputs: /kaggle/working/lora24/<job>/.
 
-GPU budget: ~3 h per job (public recipe's measurement), 3 jobs per worker -> ~9-10 GPU hours for one run.
-User decision (19 Oct): no GPU before the 24 Oct reset; GPU runs need the user's go-ahead.
+GPU budget: the public recipe caps its run at 10 h (3 jobs per worker); our probe2 (4B, 27 layers, 4 epochs, ~1 h per
+fold on a T4) scales to ~1.4 h per 8B-24 job, i.e. ~4.5 h for 3 jobs per worker. --budget-h (default 5) stops the
+training at a hard wall-clock cap; complete jobs are kept. User decisions: no GPU before the 24 Oct reset; the week of
+24 Oct gives NLLM ~7 GPU hours (S6E10 ~23 h).
 
 Usage (repo root):
   python kaggle/build_gpu_lora24.py --slug nllm-lora24 [--push]                       GPU run (8B, all 6 jobs)
@@ -29,6 +31,7 @@ if __name__ == "__main__":
     ap.add_argument("--hint", default="8b-base")
     ap.add_argument("--args", default="--jobs f0,f1,f2,f3,f4,final --epochs 3")
     ap.add_argument("--smoke", action="store_true", help="CPU kernel, 0.6B, 6 prompts, 1 epoch, 12 layers, job f0")
+    ap.add_argument("--budget-h", type=float, default=5.0, help="wall-clock cap of the training (LORA24_BUDGET_H)")
     ap.add_argument("--infer-from", default="", help="CPU inference smoke on the output of this (smoke) kernel")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--fetch", action="store_true")
@@ -67,7 +70,8 @@ if __name__ == "__main__":
     d = kaggle_runner.build(
         build, a.slug, "hasancmert",
         code_files={f"src/{f}": ROOT / "src" / f for f in ("gpu_lora.py", "gpu_lora24.py", "gpu_run_lora24.py")},
-        commands=[f"{env}LORA24_MODEL_HINT={hint} python src/gpu_run_lora24.py {args}"],
+        commands=[f"{env}LORA24_MODEL_HINT={hint} LORA24_BUDGET_H={0 if a.smoke else a.budget_h:g} "
+                  f"python src/gpu_run_lora24.py {args}"],
         competition="name-that-llm", datasets=["hasancmert/nllm-folds"],
         models=[f"qwen-lm/qwen-3/transformers/{hint}/1"], out_dirs=(),
         gpu=not a.smoke, internet=False, machine_shape=None if a.smoke else "NvidiaTeslaT4")

@@ -3,7 +3,10 @@ runs one worker process per visible GPU (CUDA_VISIBLE_DEVICES=w; worker w takes 
 Extra arguments are forwarded to every worker (e.g. --jobs f0,f1,f2,f3,f4,final --epochs 3).
 Smoke test on a CPU kernel: LORA24_DEVICE=cpu (one worker, e.g. --limit 6 --epochs 1 --n-layers 12 --jobs f0).
 Outputs go straight to /kaggle/working/lora24 (LORA24_OUT): the generic runner only keeps top-level files of its
-output dirs, and each job writes a directory (adapter, heads, features)."""
+output dirs, and each job writes a directory (adapter, heads, features).
+LORA24_BUDGET_H (hours, default none): wall-clock cap of the GPU session's training; when it is reached the workers are
+stopped, completed jobs (COMPLETE.json) stay in the output, the driver exits 0 and lists what is missing (a later run
+can train the missing jobs alone with --jobs)."""
 import glob
 import os
 import subprocess
@@ -35,7 +38,17 @@ if __name__ == "__main__":
         log = open(f"lora24_worker{w}.log", "w")
         procs.append((subprocess.Popen(base + ["--worker", str(w)], env=env, stdout=log, stderr=subprocess.STDOUT), log))
     seen = [0] * n
+    budget = float(os.environ.get("LORA24_BUDGET_H", "0")) * 3600
+    t_start = time.time()
     while True:
+        if budget and time.time() - t_start > budget:
+            for p, _ in procs:
+                if p.poll() is None:
+                    p.terminate()
+            out = os.environ.get("LORA24_OUT", "/kaggle/working/lora24")
+            done = sorted(os.path.basename(os.path.dirname(f)) for f in glob.glob(f"{out}/*/COMPLETE.json"))
+            print(f"TIME BUDGET {budget / 3600:.2f} h reached: workers stopped; complete jobs {done}", flush=True)
+            break
         for w in range(n):
             lines = open(f"lora24_worker{w}.log", errors="replace").read().splitlines()
             for line in lines[seen[w]:]:
