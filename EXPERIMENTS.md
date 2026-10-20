@@ -314,6 +314,12 @@ ortalama / std'siyle ölçekleniyor (etiket yok). Tek LR üyesi, C=0.0003; tutul
   - N-gram ikizi (public stylegram ikizinin karşılığı; char+word+fw+shapew TF-IDF, fold başına doğrusal Gram, satırlar 562–566): tek başına küçük kazanç (+0.004 … +0.013), LM ikizlerinin üstüne en iyi ayar (C=3, w=0.25) yapı başına −0.002 … +0.003 (ortalama ~+0.001). Benimsenmedi.
   - Küme boyutuna göre ikiz ağırlığı (satırlar 568–572; 2 metinlik kümede 0.25, 3–4'te 0.5, 5+'da 0.75; 6 ayardan biri, aynı benzetimlerde seçildi): sabit 0.5'e göre eşli fark 1–2: +0.006 ± 0.004, 1–5: +0.001 ± 0.002, 2–4: +0.001 ± 0.001, 3–8: +0.005 ± 0.001, 18: +0.009. Küçük ve çoğunlukla anlamsız; sonraki sürüm için ucuz aday, v7 değiştirilmedi.
 
+**Dış veriyle LM üyeleri ve ikizler için hazırlık (19–20 Ekim; GPU yok, kullanıcı kararı):** dış veri pasajlarının LM öznitelikleri olmadan yalnız kod yolları doğrulandı.
+- `train_emb --ext pub`: sentetik veride dış satırlar BA'yı beklendiği gibi artırıyor (kod yolu testi).
+- Primal uzman (`family_spec --primal`, 4B 12 katman, süper aile): Gram'lı sürümle aile içi BA 0.4639 / 0.4636, NLL 1.3953 / 1.3952, argmax uyumu %98.4 (fark çözücü toleransı).
+- Primal ikiz (`adaptive_sim --primal`, v7 tabanı, aynı 5 benzetim): kazanç 1–5: +0.0319 / Gram +0.0314; 2–4: +0.0479 / +0.0465.
+- LoRA24 (`gpu_lora24.py`): Kaggle CPU duman testleri geçti (eğitim: 0.6B, 12 katman, 6 prompt, 1 epoch, bütün çıktılar; çıkarım: çapa eşleşmesi birebir). GPU koşusu 24 Ekim'den sonra, kullanıcı onayıyla.
+
 ## Featherless ek veri: uyum testi (16 Ekim; dal `featherless-extra-data`)
 
 > Ek veri dalı (`featherless-extra-data`) 18 Ekim'de ana dala birleştirildi. Bu dalın deney satırları `D` önekiyle ayrı tabloda (dosyanın sonunda); iki dal aynı numaraları kullanmıştı.
