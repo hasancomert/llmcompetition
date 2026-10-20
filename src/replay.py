@@ -202,6 +202,9 @@ def setup_lm(a, tr, te, t0, extra=()):
     emb = ROOT / "outputs" / "emb"
     emb.mkdir(parents=True, exist_ok=True)
     models = [(n, h, None) for n, h in LM_MODELS] + list(extra)
+    for f in glob.glob("/kaggle/input/**/*_ext_pub.*", recursive=True):   # LM features of the public passages
+        if Path(f).name.startswith(("emb_", "lp_", "meta_")):           # (output of nllm-gpu-embed-ext, attached)
+            link(Path(f), emb / Path(f).name)
     if a.precomputed_lm:
         p = Path(a.precomputed_lm)
         for name, _, _ in models:

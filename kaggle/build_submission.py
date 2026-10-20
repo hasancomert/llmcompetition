@@ -60,7 +60,7 @@ PUB_DATASETS = ["prvsiyan/prvsiyans-extended-name-that-llm-dataset", "seyitkaang
 
 
 def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: list | None = None,
-          ext_dataset: bool = False, pub_datasets: bool = False) -> Path:
+          ext_dataset: bool = False, pub_datasets: bool = False, kernel_sources: list | None = None) -> Path:
     files = code_files()
     payload = {rel: base64.b64encode(p.read_bytes()).decode() for rel, p in files.items()}
     sha = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
@@ -88,7 +88,7 @@ def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: lis
             "competition_sources": ["name-that-llm"],
             "dataset_sources": [f"{USER}/nllm-tokenizers", f"{USER}/nllm-folds"] + ([f"{USER}/nllm-lmfeats"] if gpu else [])
                                + ([EXT_DATASET] if ext_dataset else []) + (PUB_DATASETS if pub_datasets else []),
-            "model_sources": GPU_MODELS if gpu else [], "kernel_sources": []}
+            "model_sources": GPU_MODELS if gpu else [], "kernel_sources": list(kernel_sources or [])}
     if gpu:
         meta["machine_shape"] = "NvidiaTeslaT4"
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
@@ -105,11 +105,15 @@ if __name__ == "__main__":
     ap.add_argument("--extra", default="", help="extra pipeline arguments, space-separated (ablations)")
     ap.add_argument("--ext-dataset", action="store_true",
                     help=f"attach {EXT_DATASET} as an input (needed by replay.py --ext; never copied or re-uploaded)")
+    ap.add_argument("--kernel-sources", default="",
+                    help="comma-separated private kernel outputs to attach (e.g. hasancmert/nllm-gpu-embed-ext: LM "
+                         "features of the public passages, linked by replay.setup_lm)")
     ap.add_argument("--pub-datasets", action="store_true",
                     help="attach the public generated-passage datasets (recipes with *_pub steps; never re-uploaded)")
     a = ap.parse_args()
     if "--ext" in a.extra.split() and not a.ext_dataset:
         ap.error("--extra uses --ext: add --ext-dataset so the corpus is attached as a notebook input")
-    d = build(a.gpu, a.slug, a.pipeline, a.extra.split(), a.ext_dataset, a.pub_datasets)
+    d = build(a.gpu, a.slug, a.pipeline, a.extra.split(), a.ext_dataset, a.pub_datasets,
+              [k for k in a.kernel_sources.split(",") if k])
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)
