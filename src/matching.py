@@ -24,12 +24,14 @@ from common import K, OUT, encode_y, iter_folds, load_folds, load_member, load_t
 MIN_CLUSTER_ROWS = 40   # below this the test is too small to cluster (the interactive 1-3 row test)
 
 
-def topic_matrix(texts, max_df_docs=40):
+def topic_matrix(texts, max_df_docs=40, ngram=1):
     """Unit-norm TF-IDF rows of content words (topic, not style). max_df is an ABSOLUTE document count: a word
     shared by one prompt's texts appears in <= ~18 documents whatever the test size, so the representation does not
-    change with n (audit finding: a relative max_df and a fixed SVD size tied the threshold to 150 prompts)."""
+    change with n (audit finding: a relative max_df and a fixed SVD size tied the threshold to 150 prompts).
+    ngram 2: content-word unigrams and bigrams."""
     tv = TfidfVectorizer(lowercase=True, stop_words="english", sublinear_tf=True, min_df=2,
-                         max_df=max(int(max_df_docs), 2), token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b")
+                         max_df=max(int(max_df_docs), 2), token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b",
+                         ngram_range=(1, ngram))
     try:
         X = tv.fit_transform(texts)
     except ValueError:            # no term survives pruning (tiny or odd input): every text its own topic
@@ -37,13 +39,13 @@ def topic_matrix(texts, max_df_docs=40):
     return normalize(X)
 
 
-def cluster_tree(texts, max_df_docs=40):
-    """Average-linkage tree (scipy) over cosine distances of topic_matrix rows. Returns (Z, nz, n): Z is None
-    when fewer than two texts have a surviving content word."""
+def cluster_tree(texts, max_df_docs=40, method="average", ngram=1):
+    """Hierarchical tree (scipy; average linkage by default) over cosine distances of topic_matrix rows. Returns
+    (Z, nz, n): Z is None when fewer than two texts have a surviving content word."""
     from scipy.cluster.hierarchy import linkage
     from scipy.spatial.distance import squareform
     n = len(texts)
-    X = topic_matrix(texts, max_df_docs)
+    X = topic_matrix(texts, max_df_docs, ngram)
     if X is None:
         return None, np.array([], dtype=np.int64), n
     nz = np.flatnonzero(X.getnnz(axis=1) > 0)
@@ -53,7 +55,7 @@ def cluster_tree(texts, max_df_docs=40):
     np.clip(D, 0.0, 2.0, out=D)
     np.fill_diagonal(D, 0.0)
     D = (D + D.T) / 2
-    return linkage(squareform(D, checks=False), method="average"), nz, n
+    return linkage(squareform(D, checks=False), method=method), nz, n
 
 
 def cut_tree(tree, threshold):
@@ -66,12 +68,12 @@ def cut_tree(tree, threshold):
     return np.unique(labels, return_inverse=True)[1]
 
 
-def cluster_prompts(texts, threshold=0.92, max_df_docs=40):
+def cluster_prompts(texts, threshold=0.92, max_df_docs=40, method="average", ngram=1):
     """Prompt clusters of a set of texts; the number of clusters follows from the threshold (not given).
     Texts with no surviving content word become singletons instead of crashing the cosine metric."""
     if len(texts) < MIN_CLUSTER_ROWS:
         return np.arange(len(texts))
-    return cut_tree(cluster_tree(texts, max_df_docs), threshold)
+    return cut_tree(cluster_tree(texts, max_df_docs, method, ngram), threshold)
 
 
 def scale_study(P, y, prompts, texts, reps=3, seed=0):

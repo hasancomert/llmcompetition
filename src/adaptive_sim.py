@@ -177,6 +177,10 @@ def main():
     ap.add_argument("--sims", type=int, default=10)
     ap.add_argument("--thr", type=float, default=0.92, help="cluster cut (tfidf: matching.cluster_prompts; mix: mixed)")
     ap.add_argument("--cluster", default="tfidf", choices=["tfidf", "mix"])
+    ap.add_argument("--linkage", default="average", choices=["average", "complete", "weighted"],
+                    help="tfidf clustering: linkage method")
+    ap.add_argument("--max-df", type=int, default=40, help="tfidf clustering: absolute max document count")
+    ap.add_argument("--ngram", type=int, default=1, help="tfidf clustering: 2 = content-word unigrams + bigrams")
     ap.add_argument("--mix-emb", default="qwen3_8b_base_l12@7", help="--cluster mix: name@layer-index of the embedding")
     ap.add_argument("--min-size", type=int, default=2)
     ap.add_argument("--max-size", type=int, default=18)
@@ -240,7 +244,8 @@ def main():
         for sim in range(a.sims):
             keep = keep_rows("perprompt", y, prompts, rng, sa)
             kt = [texts[i] for i in keep]
-            g = mixed_clusters(kt, Emix[keep], a.thr) if Emix is not None else cluster_prompts(kt, a.thr)
+            g = mixed_clusters(kt, Emix[keep], a.thr) if Emix is not None else \
+                cluster_prompts(kt, a.thr, a.max_df, a.linkage, a.ngram)
             sizes = np.bincount(g)[g]
             adapt = (sizes >= a.min_size) & (sizes <= a.max_size)
             yk, Pp = y[keep], plain[keep]
