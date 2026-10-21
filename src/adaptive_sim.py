@@ -23,6 +23,9 @@ twins alone).
 every cluster of m..max-size texts, after the twins: each text of the cluster gets a different model (columns
 plain_h<m>, C<C>_w<w>_h<m>; h<m>_share = share of kept texts in such clusters, h<m>_pure = share of those whose cluster
 holds one prompt only).
+--gauss-views v1;v2 adds the shared-prompt Gaussian group head (gauss_head.py) of each view: fitted per fold on the
+training rows (true prompt ids), it decodes every adapted cluster jointly; its log-posteriors (temperature T) are added
+with weight wg on the adapted rows, alone (columns G<T>x<wg>) and on top of the twins (C<C>_w<w>_G<T>x<wg>).
 
 Usage: python adaptive_sim.py --views qwen3_8b_base_l12,qwen3_4b_base_l12 --C 0.0003,0.001 --ranges 1-2,1-5,2-4,3-8
 """
@@ -211,6 +214,10 @@ def main():
     ap.add_argument("--ng-views", default="", help="n-gram twin views, ';'-separated stream sets (e.g. char+word+fw+shapew)")
     ap.add_argument("--ng-C", default="10,30", help="C grid of the n-gram twins")
     ap.add_argument("--ng-weights", default="0.25,0.5", help="weight grid of the n-gram twin evidence")
+    ap.add_argument("--gauss-views", default="", help="';'-separated block specs of Gaussian group heads")
+    ap.add_argument("--gauss-d", type=int, default=256)
+    ap.add_argument("--gauss-T", default="1,3", help="temperature grid of the Gaussian head")
+    ap.add_argument("--gauss-w", default="0.1,0.25,0.5", help="weight grid of the Gaussian evidence")
     ap.add_argument("--hungarian", default="", help="one-to-one assignment inside clusters of m..max-size texts after "
                     "the twins; comma-separated m values (empty: none)")
     ap.add_argument("--seed", type=int, default=0)
@@ -258,6 +265,21 @@ def main():
             trn = np.flatnonzero(folds != k)
             twins[v, k] = Twin(Kfull, trn, y[trn], prompts[trn], ng_Cs)
         print(f"n-gram twin {v}: 5 folds ({time.time() - t0:.0f}s)", flush=True)
+    gviews = [v for v in a.gauss_views.split(";") if v]
+    gTs = [float(t) for t in a.gauss_T.split(",")]
+    gws = [float(w) for w in a.gauss_w.split(",")]
+    gU = {}                                              # (view, fold) -> (head, all train rows transformed)
+    if gviews:
+        from emb_primal import raw_blocks
+        from gauss_head import GaussHead
+        for v in gviews:
+            Xtr = raw_blocks(v, tr, te)[0]
+            for k in range(n_f):
+                trn = np.flatnonzero(folds != k)
+                h = GaussHead(d=a.gauss_d).fit(Xtr[trn], y[trn], prompts[trn], K)
+                gU[v, k] = (h, h.transform(Xtr))
+            del Xtr
+            print(f"gauss {v}: 5 folds ({time.time() - t0:.0f}s)", flush=True)
     rng = np.random.default_rng(a.seed)
     rows = []
     for rg in a.ranges.split(","):
@@ -299,6 +321,25 @@ def main():
                             L[loc] += np.log(np.clip(P[[pos[r] for r in loc]], 1e-9, 1))
                 return L
             L_ng = {nC: evidence(ng_views, nC) for nC in ng_Cs} if ng_views else {}
+            L_g = {}
+            for T in (gTs if gviews else []):                # Gaussian group heads: clusters decoded jointly
+                Lg = np.zeros((len(keep), K))
+                for v in gviews:
+                    for k in range(n_f):
+                        loc = np.flatnonzero((fk == k) & adapt)
+                        if len(loc):
+                            members = np.flatnonzero(np.isin(g, np.unique(g[loc])))
+                            h, U = gU[v, k]
+                            S = h.scores(U[keep[members]], g[members], T)
+                            pos = {r: i for i, r in enumerate(members)}
+                            Lg[loc] += S[[pos[r] for r in loc]]
+                L_g[T] = Lg
+            for T, Lg in L_g.items():
+                for wg in gws:
+                    zg = lp + wg * Lg
+                    res[f"G{T:g}x{wg:g}"] = ba(zg)
+                    for m in hms:
+                        res[f"G{T:g}x{wg:g}_h{m}"] = ba_pred(hungarian(zg, g, m, a.max_size))
             buckets = [tuple(float(x) for x in t.split("/")) for t in a.bucket_w.split(";") if t]
             for C in Cs:
                 L = evidence(views, C)
@@ -310,6 +351,12 @@ def main():
                     res[f"C{C:g}_w{w:g}"] = ba(z)
                     for m in hms:
                         res[f"C{C:g}_w{w:g}_h{m}"] = ba_pred(hungarian(z, g, m, a.max_size))
+                    for T, Lg in L_g.items():
+                        for wg in gws:
+                            res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}"] = ba(z + wg * Lg)
+                            for m in hms:
+                                res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}_h{m}"] = ba_pred(hungarian(z + wg * Lg, g, m,
+                                                                                             a.max_size))
                     for b in alphas:
                         res[f"C{C:g}_w{w:g}_b{b:g}"] = ba(balance(z, b))
                     for nC, Ln in L_ng.items():
@@ -322,7 +369,7 @@ def main():
             print(" ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in res.items()), flush=True)
     df = pd.DataFrame(rows)
     cols = [c for c in df.columns if c not in ("range", "sim", "n")]
-    var = [c for c in cols if c.startswith(("C", "plain_b", "plain_h"))]   # variants, compared with the plain pipeline
+    var = [c for c in cols if c.startswith(("C", "G", "plain_b", "plain_h"))]   # variants, vs the plain pipeline
     summ = df.groupby("range")[cols].mean()
     for c in var:
         d = df[c] - df["plain"]
