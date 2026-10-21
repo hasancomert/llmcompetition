@@ -210,11 +210,13 @@ def run_job(a, name, d, rank=0, world=1):
         fit, valid = np.arange(len(y)), np.zeros(0, int)
         epochs, lr, head_lr, init = a.pre_epochs, a.pre_lr, a.pre_head_lr, None
         weight = class_weights(y)
+        max_seconds = a.pre_max_seconds
     else:
         ids, y, groups, folds = d["ids"], d["y"], d["groups"], d["folds"]
         fit = np.flatnonzero(folds != int(name[1:])) if name != "final" else np.arange(len(y))
         valid = np.flatnonzero(folds == int(name[1:])) if name != "final" else np.zeros(0, int)
         epochs, lr, head_lr, weight = a.epochs, a.lr, a.head_lr, None
+        max_seconds = a.max_seconds
         init = Path(a.out) / "pre" if a.init_pre else None
         if init is not None:
             assert (init / "COMPLETE.json").exists(), f"{init}: stage-1 job not complete"
@@ -305,8 +307,8 @@ def run_job(a, name, d, rank=0, world=1):
                 log["history"].append(h)
                 if rank == 0:
                     print(f"[{name}] {json.dumps(h)}", flush=True)
-            if a.max_seconds:                        # wall-clock cap: process 0 decides for everyone
-                flag = torch.tensor([float(time.time() - t0 > a.max_seconds)], device=device)
+            if max_seconds:                          # wall-clock cap: process 0 decides for everyone
+                flag = torch.tensor([float(time.time() - t0 > max_seconds)], device=device)
                 if world > 1:
                     dist.broadcast(flag, 0)
                 stop = bool(flag.item())
@@ -315,7 +317,7 @@ def run_job(a, name, d, rank=0, world=1):
         if stop:
             log["truncated"] = True
             if rank == 0:
-                print(f"[{name}] TIME CAP {a.max_seconds}s reached after {step}/{total} updates", flush=True)
+                print(f"[{name}] TIME CAP {max_seconds}s reached after {step}/{total} updates", flush=True)
             break
     log["updates_done"] = step
     log["train_seconds"] = round(time.time() - t1, 1)
@@ -370,7 +372,8 @@ def main():
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     ap.add_argument("--limit", type=int, default=0, help="SMOKE TEST ONLY: keep the first N prompts' rows")
     ap.add_argument("--micro", type=int, default=1, help="triples per forward pass")
-    ap.add_argument("--max-seconds", type=float, default=0, help="wall-clock cap of each job (0: none)")
+    ap.add_argument("--max-seconds", type=float, default=0, help="wall-clock cap of each fold job (0: none)")
+    ap.add_argument("--pre-max-seconds", type=float, default=0, help="wall-clock cap of the job 'pre' (0: none)")
     ap.add_argument("--ddp", action="store_true", help="torchrun: every job on all processes, gradients summed")
     ap.add_argument("--init-pre", action="store_true", help="fold jobs start from <out>/pre (two-stage)")
     ap.add_argument("--pool-min-labels", type=int, default=10, help="job 'pre': minimum labels per pool block")
@@ -384,7 +387,8 @@ def main():
     if a.ddp:
         import torch
         import torch.distributed as dist
-        dist.init_process_group("nccl" if a.device == "cuda" else "gloo")
+        from datetime import timedelta
+        dist.init_process_group("nccl" if a.device == "cuda" else "gloo", timeout=timedelta(hours=1))
         rank, world = dist.get_rank(), dist.get_world_size()
         if a.device == "cuda":
             torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
