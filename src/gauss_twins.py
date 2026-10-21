@@ -20,6 +20,7 @@ import time
 import numpy as np
 
 from common import K, OUT, encode_y, load_folds, load_test, load_train
+from emb_kernel import raw_matrix
 from emb_primal import raw_blocks
 from gauss_head import GaussHead
 from matching import cluster_prompts
@@ -51,14 +52,18 @@ def main():
           f"{a.min_size}..{a.max_size} (cut {a.thr})", flush=True)
     if len(rows):
         for v in [v for v in a.views.split(";") if v]:
-            Xtr, Xte, _ = raw_blocks(v, tr, te)
+            if any(c in v for c in "@*+"):                  # layer selection / weights: explicit blocks (copies)
+                Xtr, Xte, _ = raw_blocks(v, tr, te)
+            else:                                            # a plain LM name: views of one matrix, no copies
+                X = raw_matrix(v, tr, te)
+                Xtr, Xte = X[:len(tr)], X[len(tr):]
             P = np.zeros((len(rows), K))
             for k in range(n_f):
                 trn = np.flatnonzero(folds != k)
                 h = GaussHead(d=a.d).fit(Xtr[trn], y[trn], prompts[trn], K)
-                P += np.exp(h.scores(h.transform(Xte[rows]), g[rows], a.T)) / n_f
+                P += np.exp(h.scores(h.transform(Xte)[rows], g[rows], a.T)) / n_f
             ev[rows] += np.log(np.clip(P, 1e-9, 1))
-            del Xtr, Xte
+            Xtr = Xte = X = None
             print(f"[gauss] view {v}: done ({time.time() - t0:.0f}s)", flush=True)
     TW.mkdir(parents=True, exist_ok=True)
     meta = {"views": a.views, "d": a.d, "T": a.T, "thr": a.thr, "min_size": a.min_size, "max_size": a.max_size,

@@ -41,22 +41,28 @@ class GaussHead:
         self.d, self.lam_floor = d, lam_floor
 
     def fit(self, X, y, prompts, K):
-        X = np.asarray(X, np.float64)
+        """Memory: the (N, D) work is float32 in one buffer (standardized, then prompt-centered in place); the
+        reduced (N, d) part is float64."""
+        X = np.asarray(X)
         pu, pinv = np.unique(np.asarray(prompts), return_inverse=True)
         G = len(pu)
-        self.mx = X.mean(0)
-        sx = X.std(0)
+        self.mx = X.mean(0, dtype=np.float64)
+        sx = X.std(0, dtype=np.float64)
         self.sx = np.where(sx > 1e-8, sx, 1.0)
-        Xs = (X - self.mx) / self.sx
+        R = np.subtract(X, self.mx.astype(np.float32), dtype=np.float32)
+        R /= self.sx.astype(np.float32)                             # standardized rows
         cnt = np.bincount(pinv, minlength=G).astype(float)
-        Pm = np.zeros((G, X.shape[1]))
-        np.add.at(Pm, pinv, Xs)
-        R = Xs - (Pm / cnt[:, None])[pinv]                       # prompt-centered rows
+        members = [np.flatnonzero(pinv == i) for i in range(G)]
+        Pm = np.stack([R[ix].mean(0, dtype=np.float64) for ix in members])   # prompt means (G, D)
+        for i, ix in enumerate(members):                            # prompt-centered rows, in place
+            R[ix] -= Pm[i].astype(np.float32)
         d = int(min(self.d, len(X) - G - 1, X.shape[1]))
-        w, U = np.linalg.eigh(R @ R.T)
+        w, U = np.linalg.eigh((R @ R.T).astype(np.float64))
         o = np.argsort(w)[::-1][:d]
-        V = R.T @ (U[:, o] / np.sqrt(np.clip(w[o], 1e-12, None)))  # (D, d) orthonormal directions
-        Z = Xs @ V
+        V = R.T @ (U[:, o] / np.sqrt(np.clip(w[o], 1e-12, None))).astype(np.float32)   # (D, d) orthonormal
+        Z = (R @ V).astype(np.float64) + (Pm @ V)[pinv]            # = standardized rows @ V
+        V = V.astype(np.float64)
+        del R
         mu, P = np.zeros((K, d)), np.zeros((G, d))
         for _ in range(4):                                          # additive fit: Z = mu[y] + P[prompt] + E
             Rz = Z - P[pinv]
@@ -81,8 +87,16 @@ class GaussHead:
         self.lam = np.clip(lam, self.lam_floor, None)
         return self
 
-    def transform(self, X):
-        return ((np.asarray(X, np.float64) - self.mx) / self.sx) @ self.W
+    def transform(self, X, chunk=1024):
+        """Reduced, whitened rows (float64), computed in float32 chunks of rows."""
+        X = np.asarray(X)
+        mx, sx, W = self.mx.astype(np.float32), self.sx.astype(np.float32), self.W.astype(np.float32)
+        out = np.empty((len(X), W.shape[1]))
+        for s in range(0, len(X), chunk):
+            B = np.subtract(X[s:s + chunk], mx, dtype=np.float32)
+            B /= sx
+            out[s:s + chunk] = B @ W
+        return out
 
     def group_logpost(self, U, T=1.0, iters=5):
         """(n, K) log posteriors of the labels of n texts that share one prompt (distinct labels)."""
