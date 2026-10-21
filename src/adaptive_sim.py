@@ -19,6 +19,10 @@ grid of weights, cluster purity, share of texts that got a twin. --balance adds 
 --ng-views adds n-gram twins (TF-IDF streams of train_ngram.py, linear-kernel Gram; vectorizers fit on the fold's
 training texts) with their own C / weight grids, on top of the LM twins (columns C<C>_w<w>_n<nC>x<wn>; C0_... = n-gram
 twins alone).
+--hungarian m1,m2 adds a hard one-to-one assignment (scipy linear_sum_assignment on the final log-posteriors) inside
+every cluster of m..max-size texts, after the twins: each text of the cluster gets a different model (columns
+plain_h<m>, C<C>_w<w>_h<m>; h<m>_share = share of kept texts in such clusters, h<m>_pure = share of those whose cluster
+holds one prompt only).
 
 Usage: python adaptive_sim.py --views qwen3_8b_base_l12,qwen3_4b_base_l12 --C 0.0003,0.001 --ranges 1-2,1-5,2-4,3-8
 """
@@ -35,6 +39,7 @@ from common import K, balance, encode_y, load_folds, load_member, load_test, loa
 from emb_kernel import combined_gram
 from emb_raw_explore import parse_blocks
 from matching import cluster_prompts, topic_matrix
+from scipy.optimize import linear_sum_assignment
 from structure_sim import keep_rows, purity
 
 
@@ -52,6 +57,20 @@ def mixed_clusters(texts, E, thr, max_df_docs=40):
     D = (D + D.T) / 2
     return np.unique(fcluster(linkage(squareform(D, checks=False), method="average"), thr, criterion="distance"),
                      return_inverse=True)[1]
+
+
+def hungarian(z, g, lo, hi):
+    """argmax predictions, except inside clusters of lo..hi texts: a one-to-one assignment of models to texts
+    maximizing the summed log-posteriors (each text of the cluster gets a different model)."""
+    pred = z.argmax(1)
+    lz = z - z.max(1, keepdims=True)
+    lz -= np.log(np.exp(lz).sum(1, keepdims=True))
+    for c in np.unique(g):
+        ix = np.flatnonzero(g == c)
+        if lo <= len(ix) <= min(hi, K):
+            r, col = linear_sum_assignment(-lz[ix])
+            pred[ix[r]] = col
+    return pred
 
 
 def pair_stats(g, prompts):
@@ -192,6 +211,8 @@ def main():
     ap.add_argument("--ng-views", default="", help="n-gram twin views, ';'-separated stream sets (e.g. char+word+fw+shapew)")
     ap.add_argument("--ng-C", default="10,30", help="C grid of the n-gram twins")
     ap.add_argument("--ng-weights", default="0.25,0.5", help="weight grid of the n-gram twin evidence")
+    ap.add_argument("--hungarian", default="", help="one-to-one assignment inside clusters of m..max-size texts after "
+                    "the twins; comma-separated m values (empty: none)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--log", default="", help="EXPERIMENTS.md tag prefix (empty: no rows)")
     extdata.add_args(ap)
@@ -205,6 +226,7 @@ def main():
     Cs = [float(c) for c in a.C.split(",")]
     ws = [float(w) for w in a.weights.split(",")]
     alphas = [float(b) for b in a.balance.split(",")] if a.balance else []
+    hms = [int(m) for m in a.hungarian.split(",")] if a.hungarian else []
     views = a.views.replace(",", ";").split(";") if ";" in a.views else a.views.split(",")
     Emix = None
     if a.cluster == "mix":
@@ -257,6 +279,13 @@ def main():
             ba = lambda z: metrics.balanced_accuracy(yk, np.eye(K)[z.argmax(1)])
             for b in alphas:
                 res[f"plain_b{b:g}"] = ba(balance(lp, b))
+            ba_pred = lambda p: metrics.balanced_accuracy(yk, np.eye(K)[p])
+            for m in hms:
+                big = (sizes >= m) & (sizes <= a.max_size)
+                res[f"h{m}_share"] = float(big.mean())
+                res[f"h{m}_pure"] = float(np.mean([len(np.unique(prompts[keep][g == c])) == 1 for c in g[big]])) \
+                    if big.any() else float("nan")
+                res[f"plain_h{m}"] = ba_pred(hungarian(lp, g, m, a.max_size))
             def evidence(vs, C):
                 L = np.zeros((len(keep), K))                 # summed twin log-probabilities (adapted rows only)
                 for v in vs:
@@ -279,6 +308,8 @@ def main():
                 for w in ws:
                     z = lp + w * L
                     res[f"C{C:g}_w{w:g}"] = ba(z)
+                    for m in hms:
+                        res[f"C{C:g}_w{w:g}_h{m}"] = ba_pred(hungarian(z, g, m, a.max_size))
                     for b in alphas:
                         res[f"C{C:g}_w{w:g}_b{b:g}"] = ba(balance(z, b))
                     for nC, Ln in L_ng.items():
@@ -291,7 +322,7 @@ def main():
             print(" ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in res.items()), flush=True)
     df = pd.DataFrame(rows)
     cols = [c for c in df.columns if c not in ("range", "sim", "n")]
-    var = [c for c in cols if c.startswith(("C", "plain_b"))]          # variants, compared with the plain pipeline
+    var = [c for c in cols if c.startswith(("C", "plain_b", "plain_h"))]   # variants, compared with the plain pipeline
     summ = df.groupby("range")[cols].mean()
     for c in var:
         d = df[c] - df["plain"]
