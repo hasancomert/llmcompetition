@@ -606,6 +606,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   3. CV kazancı varsa birleşik gönderim (v8, ~1.3 sa). Toplam ~6.5 sa.
   - S6E10 iki GPU slotunu doldurursa NLLM işleri slot boşalınca push'lanır.
   - Zamanlanmış görev (`trig_01QPMvJH5scmKNDHHNvE1KQz`, 24 Ekim 00:30 UTC): kota sıfırlanınca bu planı başlatır (önce kernel listesiyle S6E10 slotları kontrol edilir).
+    21 Ekim: istemi yeni öneriye göre güncellendi. Kullanıcı onayı yoksa yalnız `nllm-gpu-embed-ext` push'lanır, LoRA için tekrar sorulur.
 - 24 Ekim sonrası GPU planı (hazır kod):
   1. `nllm-gpu-embed-ext` (hazır, push'lanmadı): 7.700 public pasajın LM öznitelikleri. 0.6B / 1.7B 4 katman, 4B / 8B
      12 katman. Tahmin ~0.6–0.8 GPU-saat. Sonra CPU'da: dış veriyle LM üyeleri (`train_emb --ext pub`), uzmanlar
