@@ -243,6 +243,7 @@ def run_job(a, name, d, rank=0, world=1):
     if world > 1:                                    # identical start on every process
         for p in params:
             dist.broadcast(p.data, 0)
+        torch.manual_seed(a.seed + 1000 * rank)      # then different dropout masks per process
     wt = torch.as_tensor(weight, dtype=torch.float32, device=device) if weight is not None else None
     print(f"[{name}] rank {rank}/{world}: loaded in {time.time() - t0:.0f}s; fit {len(fit)} rows, held out "
           f"{len(valid)}, {total} updates, {epochs} epochs, lr {lr:g} / {head_lr:g}"
@@ -321,6 +322,13 @@ def run_job(a, name, d, rank=0, world=1):
             break
     log["updates_done"] = step
     log["train_seconds"] = round(time.time() - t1, 1)
+    if world > 1:                                    # summed gradients -> identical updates: same weights everywhere
+        cs = torch.stack([p.detach().double().sum() for p in params])
+        got = [torch.zeros_like(cs) for _ in range(world)]
+        dist.all_gather(got, cs)
+        diff = max(float((x - got[0]).abs().max()) for x in got)
+        log["rank_param_maxdiff"] = diff
+        assert diff <= 1e-6 * max(1.0, float(cs.abs().max())), f"[{name}] processes diverged: {diff}"
     net.model.eval()
     net.norms.eval()
     net.plain.eval()
