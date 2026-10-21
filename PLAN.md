@@ -437,7 +437,9 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   1. İki aşamalı LoRA (GPU). Kod hazır:
      - `gpu_lora24.py`'de 'pre' işi: havuz, sızıntılı bloklar atılı, sınıf ağırlıklı.
      - Fold işleri 'pre'den başlıyor (`--init-pre`); iki T4'te DDP.
-     - CPU duman testi, Kaggle CPU slotu boşalınca yapılacak (21 Ekim'de 5 slotu da başka proje kullanıyordu).
+     - CPU duman testi (Kaggle `nllm-lora2s-smoke`, 21 Ekim) iki kez geçti: havuz, sha256 ve sızıntı ayıklaması kernel
+       içinde; iki gloo işlemiyle DDP; 'pre' sınıf ağırlıklı, f0 'pre'den başladı. İkinci sürümde işlemler arası
+       ağırlık farkı 0.0 (her iş sonunda kontrol ediliyor). Çıktılar ağırlıksız indirildi (`--fetch`).
   2. Gaussian grup kafası + Hungarian m = 3: replay tarifi `v7g` hazır (`gauss_twins.py`); v8'in parçası.
   3. Havuz satırlarıyla CPU üyeleri (CV kazancı varsa).
   - Alınmayanlar:
