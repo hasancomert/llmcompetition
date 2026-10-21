@@ -9,7 +9,7 @@ katlarıdır ve bir dış verinin faydası aynı katlarda eşli olarak gösteril
 | (yok) | | | | Adım 2 sonuna kadar dış veri kullanılmadı. |
 | Kaggle `olegzholobov/name-that-llm-response-corpus` (snapshot 15 Ekim 2026), dosya `external_short_wide.parquet`: 18 modelin herkese açık kaynaklardan toplanmış 40–250 kelimelik cevapları (24.025 hücre) | Dataset "Other": kaynak başına karışık lisans. Apache-2.0, MIT, CC-BY-4.0 olanlar var; eqbench, artificialanalysis, glm_flash_analysis gibi bazılarının lisansı "unknown". Birçoğunda model çıktıları ayrıca sağlayıcı şartlarına tabi. Kaynak listesi: `data/external/ntl_corpus/source_catalog.csv` | Yalnız eğitim (TF-IDF üyesine ek eğitim satırı) | **Zararlı:** char+word TF-IDF LR 0.3471 → 0.2845, eşli −0.063 [−0.077, −0.047]. Öncül düzeltmesiyle 0.2874 (`src/ext_tfidf_probe.py`) | **Kullanılmıyor.** Hiçbir gönderimde yok. |
 | Kaggle'da 5 public üretilmiş pasaj dataset'i (prvsiyan, seyitkaangunes, lucasboesen, dophuchung, abdullah1afify; 18 Ekim indirildi); ayrıntı aşağıda | CC BY 4.0 (atıf şart) | Yalnız eğitim (CPU üyelerine ek eğitim satırı, ağırlık 0.3, sınıf dengeli) | **Olumlu:** charword +0.042, SVC +0.043, ng_fw +0.022, ng_fwsh +0.026 (hepsi anlamlı); süper aile birleştiricisi 0.4719 → 0.4831 (+0.011, P(fark ≤ 0) 0.04) | v7'de (charword, SVC, ng_fw; ağırlık 0.3); v7 henüz gönderilmedi |
-| Kaggle `prvsiyan/ntl-public-in-style-pool-v1` (21 Ekim indirildi): 15 public dataset'in birleşik havuzu, 38.642 pasaj (yukarıdaki 5 dataset dahil); ayrıntı aşağıda | CC BY-SA 4.0 (kaynaklar CC BY 4.0 / CC BY-SA 4.0; ikisi de ticari kullanıma izin veriyor, BY-SA paylaşımda aynı lisansı ister) | Yalnız eğitim: CPU üyelerine ek satır (`--ext pool`) ve iki aşamalı LoRA'nın 1. aşaması (GPU, 24 Ekim sonrası) | CV ölçülüyor | Değerlendirmede; hiçbir gönderimde yok |
+| Kaggle `prvsiyan/ntl-public-in-style-pool-v1` (21 Ekim indirildi): 15 public dataset'in birleşik havuzu, 38.642 pasaj (yukarıdaki 5 dataset dahil); ayrıntı aşağıda | CC BY-SA 4.0 (kaynaklar CC BY 4.0 / CC BY-SA 4.0; ikisi de ticari kullanıma izin veriyor, BY-SA paylaşımda aynı lisansı ister) | Yalnız eğitim: CPU üyelerine ek satır (`--ext pool`) ve iki aşamalı LoRA'nın 1. aşaması (GPU, 24 Ekim sonrası) | **Olumlu:** 4 görünümlü n-gram SVC 0.4101 (en iyi n-gram üyesi, +0.021, P 0.02); v7 birleştiricisi 0.4871 → 0.5030 (+0.016 [+0.004, +0.029], P 0.006). char+word LR'de belirsiz (+0.004) | `v7p` tarifinde (henüz gönderilmedi) |
 
 Dış derlem notları (16 Ekim):
 - Biçim yarışma metinlerinden çok farklı: metinlerin %94'ünde satır sonu, %55'inde markdown işareti var. Deneyde metinler
@@ -84,7 +84,15 @@ Kaynaklar (lisanslar 21 Ekim'de Kaggle metadata'sından tek tek kontrol edildi):
 - Sızıntı kontrolü (`ext_leak.compute`, aynı eşik): 37.777 satırın 2.277'si (blok düzeyinde) 89 resmi prompt'la konu
   eşleşmesi taşıyor. CPU üyelerinde bu satırlar prompt'ları doğrulamadayken eğitimden çıkıyor. İki aşamalı LoRA'nın
   1. aşaması bütün fold'lara ortak olduğu için eşleşen bloklar orada tamamen atılıyor (10+ etiketle 17.860 satır).
-- CV: ölçülüyor (EXPERIMENTS.md). Kazanç gösterilmeden hiçbir gönderime girmeyecek.
+- CV (EXPERIMENTS.md, satır 604–610):
+  - char+word TF-IDF LR (ağırlık 0.3, sınıf dengeli): pub verisiyle 0.3886, havuzla 0.3930 (+0.004 [−0.016, +0.024]).
+    Log loss 1.809 → 1.738.
+  - Public iki aşamalı notebook'un 4 görünümlü n-gram SVC'si (char, word 1–3, şekil, işlev sözcükleri; ağırlık 1,
+    sınıf dengeli): 0.4101. Pub verisiyle eğitilmiş en iyi n-gram üyelerimizden +0.021 (P 0.02). Notebook 0.435
+    bildirmişti; o sürümün sözlüğü train + havuzdan kuruluyor ve konu eşleşmeli satırları atılmıyor.
+  - v7 süper aile birleştiricisine bu üye eklenince 0.4871 → 0.5030 (+0.016 [+0.004, +0.029], P 0.006). Aynı kodla
+    v7 yapılandırması 0.4871'i birebir veriyor. Tarif `v7p`; notebook havuzu girdi olarak ekliyor
+    (`build_submission.py --pool-dataset`), sha256 farklıysa günlüğe uyarı yazılıyor.
 - Atıf: bu veriyle yapılan her paylaşımda havuzu kuran prvsiyan'a ve 15 kaynağın yazarlarına atıf yapılacak.
 
 ## Kaggle Benchmarks model proxy (16 Ekim)

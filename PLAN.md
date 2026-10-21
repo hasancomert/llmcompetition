@@ -441,7 +441,8 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
        içinde; iki gloo işlemiyle DDP; 'pre' sınıf ağırlıklı, f0 'pre'den başladı. İkinci sürümde işlemler arası
        ağırlık farkı 0.0 (her iş sonunda kontrol ediliyor). Çıktılar ağırlıksız indirildi (`--fetch`).
   2. Gaussian grup kafası + Hungarian m = 3: replay tarifi `v7g` hazır (`gauss_twins.py`); v8'in parçası.
-  3. Havuz satırlarıyla CPU üyeleri (CV kazancı varsa).
+  3. Havuz satırlarıyla CPU üyeleri: 4 görünümlü n-gram SVC birleştiricide 0.4871 → 0.5030 (+0.016, P 0.006).
+     Tarif `v7p` = v7g + bu üye. char+word LR'de havuz belirgin kazanç vermedi, alınmadı.
   - Alınmayanlar:
     - ATLAS: metin başına 18 geçiş, kazanç +0.007.
     - OLMo2 / SmolLM3 / 27B: pahalı, kazanç küçük.
@@ -452,7 +453,8 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
      - 2. aşama: 5 fold × 2 epoch, iki T4'te DDP.
      - Tahmin ~2.6 sa (probe2 hızından), sert sınır 3.5 sa.
   2. `nllm-gpu-embed-ext` (~0.7 sa).
-  3. v8 gönderimi (~1.3–1.7 sa): v7g (Gaussian + Hungarian m = 3) + LoRA üyesi ve ikizi.
+  3. v8 gönderimi (~1.3–1.7 sa): v7p (v7g + havuzlu n-gram SVC) + LoRA üyesi ve ikizi. LoRA'nın CV kazancı
+     yoksa v7p tek başına gönderilir.
   - 8B iki aşamalı LoRA 31 Ekim haftasına kalıyor: S6E10 kapanıyor, kota tamamen NLLM'e.
   - Eski plandaki "yalnız resmi veriyle 8B LoRA24" (~4.5 sa) bırakılıyor. Public CV'ye göre 1. aşamasız LoRA ~0.48,
     iki aşamalı 0.569.
