@@ -444,7 +444,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - ATLAS: metin başına 18 geçiş, kazanç +0.007.
     - OLMo2 / SmolLM3 / 27B: pahalı, kazanç küçük.
     - Başkalarının public checkpoint'leri: OOF yok, CV ile doğrulanamaz; kullanıcı kararı gerekir.
-- GPU planı önerisi (24–30 Ekim, ~7 sa; **kullanıcı onayı bekliyor**):
+- GPU planı (24–30 Ekim, ~7 sa; **kullanıcı 21 Ekim'de onayladı**):
   1. İki aşamalı LoRA, Qwen3-4B (24 katman).
      - 1. aşama: havuzun 10+ etiketli kısmı (17.860 satır, 1 epoch).
      - 2. aşama: 5 fold × 2 epoch, iki T4'te DDP.
@@ -603,13 +603,14 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
 - GPU: S6E10 ile ortak haftalık 30 saat. Bu hafta öncelik S6E10'da. Kota yetmeyecekse LoRA ve gömme işleri haftaya
   kaydırılmadan önce kullanıcıya söylenir.
 - GPU (19 Ekim akşamı, kullanıcı kararı): bu hafta artık GPU yok; kota 24 Ekim Cumartesi sıfırlanınca kullanılabilir. O zamana kadar yalnız CPU işleri: dış veri pasajlarının LM öznitelikleri için GPU işinin ve onları kullanan eğitimin kodu, LoRA hazırlığı. Plan onaylandı.
+- GPU planı değişikliği (kullanıcı onayı, 21 Ekim, "Onaylıyorum"): yalnız resmi veriyle 8B LoRA24 yerine iki aşamalı LoRA (1. aşama public pasaj havuzu, CC BY-SA 4.0). 24–30 Ekim: Qwen3-4B (sert sınır 3.75 sa) + `nllm-gpu-embed-ext` + v8 (v7g + LoRA üyesi). 8B iki aşamalı LoRA 31 Ekim haftasına. Ayrıntı: "Public çözümler incelemesi" bölümü.
 - GPU bütçesi, 24–30 Ekim haftası (kullanıcı kararı, 20 Ekim): S6E10 ~23 saat kullanacak; NLLM'e ~7 GPU-saat kalıyor. Bu bütçe içinde serbestim. Plan:
   1. Dış veri pasajlarının LM öznitelikleri (`nllm-gpu-embed-ext`, ~0.7 sa) → CPU'da dış veriyle LM üyeleri, uzmanlar, ikizler (CV).
   2. LoRA24 8B, 5 fold + final (`nllm-lora24`), sert süre sınırı 5 sa (`LORA24_BUDGET_H`). Tahmin ~4.5 sa: probe2'nin ölçümünden ölçeklendi (4B, 27 katman, 4 epoch: fold başına ~1 sa).
   3. CV kazancı varsa birleşik gönderim (v8, ~1.3 sa). Toplam ~6.5 sa.
   - S6E10 iki GPU slotunu doldurursa NLLM işleri slot boşalınca push'lanır.
   - Zamanlanmış görev (`trig_01QPMvJH5scmKNDHHNvE1KQz`, 24 Ekim 00:30 UTC): kota sıfırlanınca bu planı başlatır (önce kernel listesiyle S6E10 slotları kontrol edilir).
-    21 Ekim: istemi yeni öneriye göre güncellendi. Kullanıcı onayı yoksa yalnız `nllm-gpu-embed-ext` push'lanır, LoRA için tekrar sorulur.
+    21 Ekim: istemi yeni plana göre güncellendi; kullanıcı planı aynı gün onayladı (iki aşamalı 4B LoRA, ext-embed, v8).
 - 24 Ekim sonrası GPU planı (hazır kod):
   1. `nllm-gpu-embed-ext` (hazır, push'lanmadı): 7.700 public pasajın LM öznitelikleri. 0.6B / 1.7B 4 katman, 4B / 8B
      12 katman. Tahmin ~0.6–0.8 GPU-saat. Sonra CPU'da: dış veriyle LM üyeleri (`train_emb --ext pub`), uzmanlar
