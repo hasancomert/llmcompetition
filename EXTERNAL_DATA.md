@@ -9,6 +9,7 @@ katlarıdır ve bir dış verinin faydası aynı katlarda eşli olarak gösteril
 | (yok) | | | | Adım 2 sonuna kadar dış veri kullanılmadı. |
 | Kaggle `olegzholobov/name-that-llm-response-corpus` (snapshot 15 Ekim 2026), dosya `external_short_wide.parquet`: 18 modelin herkese açık kaynaklardan toplanmış 40–250 kelimelik cevapları (24.025 hücre) | Dataset "Other": kaynak başına karışık lisans. Apache-2.0, MIT, CC-BY-4.0 olanlar var; eqbench, artificialanalysis, glm_flash_analysis gibi bazılarının lisansı "unknown". Birçoğunda model çıktıları ayrıca sağlayıcı şartlarına tabi. Kaynak listesi: `data/external/ntl_corpus/source_catalog.csv` | Yalnız eğitim (TF-IDF üyesine ek eğitim satırı) | **Zararlı:** char+word TF-IDF LR 0.3471 → 0.2845, eşli −0.063 [−0.077, −0.047]. Öncül düzeltmesiyle 0.2874 (`src/ext_tfidf_probe.py`) | **Kullanılmıyor.** Hiçbir gönderimde yok. |
 | Kaggle'da 5 public üretilmiş pasaj dataset'i (prvsiyan, seyitkaangunes, lucasboesen, dophuchung, abdullah1afify; 18 Ekim indirildi); ayrıntı aşağıda | CC BY 4.0 (atıf şart) | Yalnız eğitim (CPU üyelerine ek eğitim satırı, ağırlık 0.3, sınıf dengeli) | **Olumlu:** charword +0.042, SVC +0.043, ng_fw +0.022, ng_fwsh +0.026 (hepsi anlamlı); süper aile birleştiricisi 0.4719 → 0.4831 (+0.011, P(fark ≤ 0) 0.04) | v7'de (charword, SVC, ng_fw; ağırlık 0.3); v7 henüz gönderilmedi |
+| Kaggle `prvsiyan/ntl-public-in-style-pool-v1` (21 Ekim indirildi): 15 public dataset'in birleşik havuzu, 38.642 pasaj (yukarıdaki 5 dataset dahil); ayrıntı aşağıda | CC BY-SA 4.0 (kaynaklar CC BY 4.0 / CC BY-SA 4.0; ikisi de ticari kullanıma izin veriyor, BY-SA paylaşımda aynı lisansı ister) | Yalnız eğitim: CPU üyelerine ek satır (`--ext pool`) ve iki aşamalı LoRA'nın 1. aşaması (GPU, 24 Ekim sonrası) | CV ölçülüyor | Değerlendirmede; hiçbir gönderimde yok |
 
 Dış derlem notları (16 Ekim):
 - Biçim yarışma metinlerinden çok farklı: metinlerin %94'ünde satır sonu, %55'inde markdown işareti var. Deneyde metinler
@@ -59,6 +60,32 @@ birleştirilmedi, `quarantine_luna_*` dışarıda. Kod: `src/ext_corpus.py` (yü
   - Bayrak kodda duruyor, varsayılan kapalı: `--ext ntl_short --ext-weight W` (üye betikleri, `replay.py --ext`).
   - Bir Kaggle not defterinde açılırsa dataset input olarak eklenir: `kaggle/build_submission.py --ext-dataset`.
     Kopyalanmaz, yeniden yüklenmez.
+
+## Public pasaj havuzu (prvsiyan/ntl-public-in-style-pool-v1, CC BY-SA 4.0; 21 Ekim)
+
+Public çözümlerin en büyük kaldıracı "iki aşamalı LoRA": önce ~35–39 bin public pasajla, sonra resmi verilerle eğitim
+(PLAN.md, "Public çözümler incelemesi"). Bunun için yarışmacıların birleştirdiği havuz indirildi
+(`data/external/pools/prvsiyan/pool_v1.parquet`, sha256 `4ae4f9b5…89dc`; git'e girmez). Nishant Dahal'ın benzer havuzu
+(`nishantdahal/ntl-two-stage-lora` içindeki `pool_v1.parquet`, 34.940 pasaj, CC BY-SA 4.0) de indirildi, kullanılmıyor.
+
+Kaynaklar (lisanslar 21 Ekim'de Kaggle metadata'sından tek tek kontrol edildi):
+
+| kaynak | lisans |
+|---|---|
+| `willrice/name-that-llm-openrouter-harvest`, `lxdlxdlxd/ntl-synth-generations-v1`, `alperen5252525/ntl-vertex-gemini-proxy-gpt-generations`, `haileycheng/name-that-llm-same-prompt-passages`, `kaplinskiy/ntl-gpt-proxy-passages`, `ziyuzhou1207/ntl-zz-proxy-generations`, `keshavatearth/ntl-gpt-new-prompts-v1`, `michaelsemenoff/ntl-own-extra-v1`, `zbigniewkirchner/ntl-extra-gpt-passages`, `seyitkaangunes/ntl-extra-api-passages`, `lucasboesen/ntl-free-proxy-generations`, `dophuchung/ntl-proxy-generations`, `abdullah1afify/ntl-generations` | CC BY 4.0 |
+| `prvsiyan/ntl-own-prompt-generations-v1`, `prvsiyan/prvsiyans-extended-name-that-llm-dataset` | CC BY-SA 4.0 (ikincisi 18 Ekim'de CC BY 4.0 olarak kaydedilmişti; dataset 19 Ekim'de güncellenmiş, şimdi BY-SA) |
+
+- Havuzu kuranın filtreleri (dataset README'si): tek paragraf, markdown yok, 30–300 kelime, normal bitiş, tam tekrar
+  yok, train pasajıyla birebir aynı olan yok, bir modelin train'de hiç kullanmadığı tipografi işaretini (uzun/kısa tire,
+  kıvrık tırnak, üç nokta) taşıyan pasajı atılmış. Yarışma metni ya da prompt'u yok.
+- Bizim kurallarımız (`src/ext_pool.py`, `ext_pub.py` ile aynı): 40–250 kelime, `clean_text`, uzun tireli Gemini
+  pasajı yok, prompt bloğu başına en az `--ext-min-labels` etiket (varsayılan 10), tekilleştirme.
+  Sonuç: 10+ etiketle 19.312 satır / 1.563 blok; 5+ etiketle 34.845; filtresiz 37.777.
+- Sızıntı kontrolü (`ext_leak.compute`, aynı eşik): 37.777 satırın 2.277'si (blok düzeyinde) 89 resmi prompt'la konu
+  eşleşmesi taşıyor. CPU üyelerinde bu satırlar prompt'ları doğrulamadayken eğitimden çıkıyor. İki aşamalı LoRA'nın
+  1. aşaması bütün fold'lara ortak olduğu için eşleşen bloklar orada tamamen atılıyor (10+ etiketle 17.860 satır).
+- CV: ölçülüyor (EXPERIMENTS.md). Kazanç gösterilmeden hiçbir gönderime girmeyecek.
+- Atıf: bu veriyle yapılan her paylaşımda havuzu kuran prvsiyan'a ve 15 kaynağın yazarlarına atıf yapılacak.
 
 ## Kaggle Benchmarks model proxy (16 Ekim)
 

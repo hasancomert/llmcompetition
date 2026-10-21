@@ -396,6 +396,62 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   4. Ham üyelerle argmax odaklı harman (E/F).
 
 
+### Public çözümler incelemesi (21 Ekim; kullanıcı isteği: "İnsanların paylaştığı çözümleri kontrol et")
+
+- Durum: LB zirvesi 0.667. En iyi public notebook'lar 0.597–0.612. Bizim v7: 0.503.
+- Soy ağacı (her adımın public LB'si; notebook'lar okundu, çalıştırılmadı):
+  - 0.563 "in-style" yığını (Travis Nguyen). Çok sayıda üye:
+    - n-gram SVC ve stilometri;
+    - dondurulmuş decoder/encoder'lar ve merkezli ikizleri;
+    - üç LoRA24, UltraBERT;
+    - Sinkhorn.
+  - 0.592 Nishant Dahal, "Two-stage LoRA on the public pool".
+    - 1. aşama: ~35 bin public pasaj (14 dataset), 1 epoch, sınıf ağırlıklı CE.
+    - 2. aşama: resmi 2.699 metin, 2 epoch, yarı lr.
+    - Qwen3-8B (24 katman) ve 14B (27 katman); ikisi de tek başına CV 0.569. Yalnız 1. aşama 0.483.
+    - Yığın: 8B + 14B + 4 görünümlü n-gram SVC (train + havuz, CV 0.435) + merkezli ikiz + Sinkhorn. CV 0.593, LB 0.592.
+    - İşe yaramayan dedikleri: tohum ortalaması, aile kapıları, kümelerde Hungarian, 2. aşamada daha çok epoch.
+  - 0.600 kirilltym: %85 iki aşamalı dal + %15 eski yığın; 8B LoRA özniteliklerinde paylaşılan-prompt Gaussian kafası
+    (prvsiyan).
+  - 0.604, iki ayrı notebook:
+    - prvsiyan v4: kendi iki aşamalı tohumları (38.642 pasajlık havuz) ve her LoRA'da Gaussian kafa.
+    - sangam21: 0.600 + 14B'de Gaussian + boşluklu uzun tire kuralı + 12–18 metinlik kümelerde Hungarian.
+  - 0.607 josephadamski: 0.600 + %10 ATLAS (Qwen3-8B adaptörü, kaynak koşullu token olabilirliği, metin başına 18 geçiş).
+  - 0.612 kiza123123: sangam21 + kıvrık tırnak kuralı + Hungarian 9–18.
+  - 0.597 lightningv08: + OLMo2, SmolLM3 ve Qwen3.8-27B (%20).
+- Bizde ölçülenler (EXPERIMENTS.md):
+  - Tipografi kuralları (satır 598):
+    - Train'de doğru: boşluklu uzun tire yalnız 4 sınıfta; Claude ve GLM'de kıvrık tırnak 1.049 metinde 0.
+    - v7 OOF'unda 1 satır değişiyor, +0.0004. Char n-gram üyelerimiz bu işaretleri zaten taşıyor.
+  - Hungarian (satır 591–597): ≥4 metinlik kümelerde birebir atama, ikizlerin üstüne.
+    - Kazanç: 1–2 +0.0006, 1–5 +0.007, 2–4 +0.002, 3–8 +0.0135, 1–18 +0.057, 9–18 +0.059, 18 +0.082.
+    - Hiçbir yapıda zarar yok. m = 4 her yapıda en iyisi (6/9/12 daha az).
+    - Eskiden başarısız olan yumuşak eşleştirmeden farkı: güncel kümeleme (0.85) ve yalnız büyük kümeler.
+  - Gaussian grup kafası (`gauss_head.py`): çift ve üçlü sonsalı brute-force integral ile birebir. Benzetim sürüyor.
+  - Havuzla CPU üyeleri (`--ext pool`): CV sürüyor.
+- Alınacaklar (öncelik sırasıyla):
+  1. İki aşamalı LoRA (GPU). Kod hazır:
+     - `gpu_lora24.py`'de 'pre' işi: havuz, sızıntılı bloklar atılı, sınıf ağırlıklı.
+     - Fold işleri 'pre'den başlıyor (`--init-pre`); iki T4'te DDP.
+     - CPU duman testi, Kaggle CPU slotu boşalınca yapılacak (21 Ekim'de 5 slotu da başka proje kullanıyordu).
+  2. Hungarian m = 4 (v8 ile).
+  3. Havuz satırlarıyla CPU üyeleri (CV kazancı varsa).
+  4. Gaussian grup kafası (benzetimde kazanç varsa).
+  - Alınmayanlar:
+    - ATLAS: metin başına 18 geçiş, kazanç +0.007.
+    - OLMo2 / SmolLM3 / 27B: pahalı, kazanç küçük.
+    - Başkalarının public checkpoint'leri: OOF yok, CV ile doğrulanamaz; kullanıcı kararı gerekir.
+- GPU planı önerisi (24–30 Ekim, ~7 sa; **kullanıcı onayı bekliyor**):
+  1. İki aşamalı LoRA, Qwen3-4B (24 katman).
+     - 1. aşama: havuzun 10+ etiketli kısmı (17.860 satır, 1 epoch).
+     - 2. aşama: 5 fold × 2 epoch, iki T4'te DDP.
+     - Tahmin ~2.6 sa (probe2 hızından), sert sınır 3.5 sa.
+  2. `nllm-gpu-embed-ext` (~0.7 sa).
+  3. v8 gönderimi (~1.3–1.7 sa): v7 + LoRA üyesi ve ikizi + Hungarian m = 4.
+  - 8B iki aşamalı LoRA 31 Ekim haftasına kalıyor: S6E10 kapanıyor, kota tamamen NLLM'e.
+  - Eski plandaki "yalnız resmi veriyle 8B LoRA24" (~4.5 sa) bırakılıyor. Public CV'ye göre 1. aşamasız LoRA ~0.48,
+    iki aşamalı 0.569.
+
 ### Featherless ek veri iş kolu (16 Ekim'de açıldı; dal `featherless-extra-data`)
 
 **Kurallar (kullanıcıdan):**
