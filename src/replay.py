@@ -185,8 +185,12 @@ RECIPES = {
             "hungarian": 3,
             "cv": 0.4871},
     "v7p": {"needs_lm": True, "lm_extra": LM_L12, "needs_pool": True,
-            # v7g + the 4-view n-gram SVC with the public pool in the super combiner (CV 0.4871 -> 0.5030)
-            "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"], ["ng4_pool"]],
+            # v7g + the 4-view n-gram SVC with the public pool in the super combiner (CV 0.4871 -> 0.5030). The SVC needs
+            # no LM features: it starts before the GPU feature extraction and is awaited before the combiner stage
+            # (local e2e replay inside stage 1: stage 1 1,731 s instead of 770 s). n-jobs 2: with 3 workers next to
+            # stage 1 the local 15 GB machine ran out of memory
+            "early": [["ng4_pool"]], "early_join": 2,
+            "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"]],
                        [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
                                           "spec_super_ng@1", "twins_l12@1"]],
                        [["famc_super_v7p"]],
@@ -322,19 +326,37 @@ def run_step(key, t0, extra=(), pub_dir="", threads=None):
     log(f"step {key}: {script} {' '.join(args)[:120]} -> ok\n{tail}", t0)
 
 
-def run_stages(stages, t0, ext_args, pub_dir):
-    """Recipe stages: the chains of a stage run side by side (each chain's steps in order), stages one after the other.
-    A chain entry is 'step' or 'step@threads' (OMP / BLAS threads of that step). Steps only exchange files through
-    outputs/, so independent members can run concurrently; the first failure is re-raised after the stage."""
-    from concurrent.futures import ThreadPoolExecutor
+def run_chain(entries, t0, ext_args, pub_dir):
+    """One chain: its steps in order; an entry is 'step' or 'step@threads' (OMP / BLAS threads of that step)."""
+    for e in entries:
+        key, _, th = e.partition("@")
+        run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir, int(th) if th else None)
 
-    def chain(entries):
-        for e in entries:
-            key, _, th = e.partition("@")
-            run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir, int(th) if th else None)
+
+def start_early(chains, t0, ext_args, pub_dir):
+    """'early' chains of a recipe: CPU-only steps (no LM features) started before the GPU feature extraction, so that
+    they overlap with it; run_stages waits for them before the stage 'early_join'. Returns (executor, futures)."""
+    from concurrent.futures import ThreadPoolExecutor
+    if not chains:
+        return None, []
+    ex = ThreadPoolExecutor(len(chains))
+    log(f"early chains started: {chains}", t0)
+    return ex, [ex.submit(run_chain, c, t0, ext_args, pub_dir) for c in chains]
+
+
+def run_stages(stages, t0, ext_args, pub_dir, early=(), early_join=None):
+    """Recipe stages: the chains of a stage run side by side (each chain's steps in order), stages one after the other.
+    Steps only exchange files through outputs/, so independent members can run concurrently; the first failure is
+    re-raised after the stage. early: futures of the early chains, awaited before stage index early_join."""
+    from concurrent.futures import ThreadPoolExecutor
     for i, stage in enumerate(stages):
+        if early and i == early_join:
+            errs = [f.exception() for f in early]
+            if any(errs):
+                raise next(e for e in errs if e)
+            log("early chains done", t0)
         with ThreadPoolExecutor(len(stage)) as ex:
-            futs = [ex.submit(chain, c) for c in stage]
+            futs = [ex.submit(run_chain, c, t0, ext_args, pub_dir) for c in stage]
             errs = [f.exception() for f in futs]
         if any(errs):
             raise next(e for e in errs if e)
@@ -344,7 +366,8 @@ def run_stages(stages, t0, ext_args, pub_dir):
 def recipe_steps(rec):
     """Step keys of a recipe in run order (sequential 'steps' or the chains of 'stages')."""
     if "stages" in rec:
-        return [e.partition("@")[0] for stage in rec["stages"] for c in stage for e in c]
+        return [e.partition("@")[0] for c in rec.get("early", []) for e in c] + \
+            [e.partition("@")[0] for stage in rec["stages"] for c in stage for e in c]
     return list(rec["steps"])
 
 
@@ -385,10 +408,13 @@ def main():
     try:
         if any("pub" in STEPS[k][2] for k in recipe_steps(rec)):
             log(f"public generated passages read from {pub_dir or 'data/external/pub (local)'}", t0)
+        early_ex, early = start_early(rec.get("early", []), t0, ext_args, pub_dir)
         if rec["needs_lm"]:
             setup_lm(a, tr, te, t0, rec.get("lm_extra", ()))
         if "stages" in rec:
-            run_stages(rec["stages"], t0, ext_args, pub_dir)
+            run_stages(rec["stages"], t0, ext_args, pub_dir, early, rec.get("early_join"))
+        if early_ex is not None:
+            early_ex.shutdown(wait=True)
         for key in rec.get("steps", []):
             run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir)
         from common import CLASSES, K, encode_y, load_member, metrics
