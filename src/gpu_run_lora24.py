@@ -6,7 +6,9 @@ Outputs go straight to /kaggle/working/lora24 (LORA24_OUT): the generic runner o
 output dirs, and each job writes a directory (adapter, heads, features).
 LORA24_BUDGET_H (hours, default none): wall-clock cap of the GPU session's training; when it is reached the workers are
 stopped, completed jobs (COMPLETE.json) stay in the output, the driver exits 0 and lists what is missing (a later run
-can train the missing jobs alone with --jobs)."""
+can train the missing jobs alone with --jobs).
+LORA24_DDP=1: one torchrun process group over all visible GPUs (2 CPU processes with LORA24_DEVICE=cpu) instead of
+independent workers: every job uses every GPU (gpu_lora24.py --ddp; two-stage: --jobs pre,f0,...,f4 --init-pre)."""
 import glob
 import os
 import subprocess
@@ -27,16 +29,23 @@ if __name__ == "__main__":
     device = os.environ.get("LORA24_DEVICE", "cuda")
     print(subprocess.run("nvidia-smi --query-gpu=name,memory.total --format=csv", shell=True, capture_output=True,
                          text=True).stdout, flush=True)
-    n = int(os.environ.get("LORA24_WORKERS", "2" if device == "cuda" else "1"))
-    base = [sys.executable, "src/gpu_lora24.py", "--model-dir", os.path.dirname(cfg[0]),
+    ddp = os.environ.get("LORA24_DDP") == "1"
+    n = int(os.environ.get("LORA24_WORKERS", "2" if device == "cuda" or ddp else "1"))
+    args = ["src/gpu_lora24.py", "--model-dir", os.path.dirname(cfg[0]),
             "--train", find("train.csv", "name-that-llm"), "--folds-csv", find("folds.csv", "nllm-folds"),
-            "--out", os.environ.get("LORA24_OUT", "/kaggle/working/lora24"), "--workers", str(n),
-            "--device", device] + sys.argv[1:]
+            "--out", os.environ.get("LORA24_OUT", "/kaggle/working/lora24"), "--device", device] + sys.argv[1:]
     procs = []
-    for w in range(n):
+    if ddp:                                          # one process group: every job on all GPUs
+        log = open("lora24_worker0.log", "w")
+        cmd = [sys.executable, "-m", "torch.distributed.run", "--standalone", f"--nproc_per_node={n}"] + args + ["--ddp"]
+        procs.append((subprocess.Popen(cmd, env=dict(os.environ, OMP_NUM_THREADS="2"), stdout=log,
+                                       stderr=subprocess.STDOUT), log))
+        n = 1
+    for w in range(0 if ddp else n):
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(w)) if device == "cuda" else dict(os.environ)
         log = open(f"lora24_worker{w}.log", "w")
-        procs.append((subprocess.Popen(base + ["--worker", str(w)], env=env, stdout=log, stderr=subprocess.STDOUT), log))
+        procs.append((subprocess.Popen([sys.executable] + args + ["--workers", str(n), "--worker", str(w)], env=env,
+                                       stdout=log, stderr=subprocess.STDOUT), log))
     seen = [0] * n
     budget = float(os.environ.get("LORA24_BUDGET_H", "0")) * 3600
     t_start = time.time()

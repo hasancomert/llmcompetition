@@ -13,6 +13,16 @@ heads 1e-3, weight decay 0.01), 10% linear warmup then cosine decay, fp16 autoca
 growth; an update whose gradients overflow is redone with half the scale, at most 3 times), gradient clipping 1.0.
 Fixed epochs: held-out labels never select anything.
 
+Two-stage variant (public "Two-stage LoRA on the public pool", Nishant Dahal; re-implemented): job 'pre' trains the
+same network on the public passage pool only (ext_pool.load; every prompt block topic-matched to an official prompt
+is dropped (ext_leak), so the stage-1 model never saw a validated prompt and is shared by all folds), class-weighted
+cross-entropy (the pool is unbalanced), --pre-epochs (1) at --pre-lr / --pre-head-lr; fold jobs then start from its
+adapter and heads (--init-pre) and train on the official rows (public recipe: 2 epochs at lr 5e-5 / 5e-4).
+--ddp (torchrun, one process per GPU; gloo on CPU): every job runs on all processes, each process takes its share of
+an update's triples and the gradients are summed across processes before the step (same update as one process).
+--micro m: m triples per forward pass (centering stays within each triple). --max-seconds: training stops at that
+wall-clock time of the job; outputs are still written (log 'truncated': true).
+
 Jobs: f0..f4 (fit = rows of the other folds, held out = fold k) and 'final' (all rows). Outputs in <out>/<job>/:
 adapter/ (peft), heads.pt (norms + plain + centered state dicts), readouts.npz (head weights as numpy, pooled layers),
 valid_features.npy (float16, held-out rows) + valid_idx.npy (their train row numbers), anchor_features.npy (train rows
@@ -20,6 +30,8 @@ valid_features.npy (float16, held-out rows) + valid_idx.npy (their train row num
 
 Usage: python gpu_lora24.py --model-dir D --train train.csv --folds-csv folds.csv --jobs f0,f1,f2,f3,f4,final
        [--worker 0 --workers 2] [--out lora24]       smoke: --device cpu --limit 72 --epochs 1 --n-layers 12
+       two-stage: torchrun --nproc_per_node 2 gpu_lora24.py ... --ddp --jobs pre,f0,f1,f2,f3,f4 --init-pre
+       --epochs 2 --lr 5e-5 --head-lr 5e-4 [--pool-min-labels 10]
 """
 from __future__ import annotations
 
@@ -68,9 +80,9 @@ def epoch_triples(fit, groups, rng):
 class Lora24:
     """Truncated trunk + LoRA + per-layer LayerNorms + plain / centered heads."""
 
-    def __init__(self, model_dir, n_layers, pool_layers, device, dtype, r=16, alpha=32, train=True):
+    def __init__(self, model_dir, n_layers, pool_layers, device, dtype, r=16, alpha=32, train=True, init=None):
         import torch
-        from peft import LoraConfig, get_peft_model
+        from peft import LoraConfig, PeftModel, get_peft_model
         from transformers import AutoConfig, AutoModel, AutoTokenizer
         disable_torchao_check()
         self.torch, self.device, self.layers = torch, device, list(pool_layers)
@@ -91,9 +103,12 @@ class Lora24:
         base.requires_grad_(False)
         H = cfg.hidden_size
         self.hidden = H
-        if train:
+        if train and init is not None:                  # stage 2: continue the stage-1 adapter
+            self.model = PeftModel.from_pretrained(base, Path(init) / "adapter", is_trainable=True)
+        elif train:
             self.model = get_peft_model(base, LoraConfig(r=r, lora_alpha=alpha, lora_dropout=0.05, bias="none",
                                                          target_modules=TARGETS))
+        if train:
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
             self.model.enable_input_require_grads()
             for p in self.model.parameters():
@@ -106,6 +121,11 @@ class Lora24:
         self.plain = nn.Linear(H * len(self.layers), len(CLASSES)).to(device).float()
         self.centered = nn.Linear(H * len(self.layers), len(CLASSES)).to(device).float()
         self.dropout = nn.Dropout(0.1)
+        if init is not None:
+            h = torch.load(Path(init) / "heads.pt", map_location=device)
+            self.norms.load_state_dict(h["norms"])
+            self.plain.load_state_dict(h["plain"])
+            self.centered.load_state_dict(h["centered"])
 
     def pooled(self, ids_batch):
         """(n, 8 * H) fp32 pooled vectors of a list of token id lists."""
@@ -121,13 +141,17 @@ class Lora24:
         assert bool(torch.isfinite(z).all()), "non-finite pooled features"
         return z, int(b["attention_mask"].sum())
 
-    def loss(self, ids_batch, y):
+    def loss(self, ids_batch, y, weight=None):
+        """CE(plain) + CE(centered) of consecutive same-prompt triples (len(ids_batch) = 3 x number of triples);
+        weight: optional per-class weights of the cross-entropy."""
         torch = self.torch
         z, n_tok = self.pooled(ids_batch)
         yt = torch.as_tensor(y, device=self.device, dtype=torch.long)
         with torch.autocast(self.device.type, enabled=False):
-            lp = torch.nn.functional.cross_entropy(self.plain(self.dropout(z)), yt)
-            lc = torch.nn.functional.cross_entropy(self.centered(self.dropout(z - z.mean(0, keepdim=True))), yt)
+            zt = z.view(-1, 3, z.shape[1])
+            zc = (zt - zt.mean(1, keepdim=True)).view_as(z)
+            lp = torch.nn.functional.cross_entropy(self.plain(self.dropout(z)), yt, weight=weight)
+            lc = torch.nn.functional.cross_entropy(self.centered(self.dropout(zc)), yt, weight=weight)
         return lp + lc, float(lp.detach()), float(lc.detach()), n_tok
 
     def features(self, ids, bs=3):
@@ -142,52 +166,124 @@ class Lora24:
         return out
 
 
-def run_job(a, name, ids, y, groups, folds):
+def pool_rows(train_csv, min_labels, limit=0, sha=""):
+    """Stage-1 rows: the public passage pool (ext_pool.load) minus every prompt block topic-matched to an official
+    prompt (ext_leak.compute, as extdata): stage 1 is shared by all folds, so it must not see any validated prompt.
+    Blocks need >= 3 rows (same-prompt triples). limit (smoke tests): keep the first N blocks. sha: expected sha256
+    of the pool file (the version the local CV used)."""
+    import hashlib
+    import ext_leak
+    import ext_pool
+    if sha:
+        got = hashlib.sha256(ext_pool._find(ext_pool.D).read_bytes()).hexdigest()
+        assert got == sha, f"pool file differs from the local copy (sha256 {got})"
+    tr = pd.read_csv(train_csv)
+    df = ext_pool.load(min_labels=min_labels)
+    lm, _ = ext_leak.compute(tr, ext_pool.load(min_labels=1))
+    flagged = set(lm.loc[lm["flagged"], "ext_id"])
+    n0 = len(df)
+    df = df[~df["ext_id"].isin(flagged)]
+    df = df[df.groupby("prompt_group_id")["ext_id"].transform("size") >= 3]
+    if limit:
+        df = df[df["prompt_group_id"].isin(df["prompt_group_id"].drop_duplicates().iloc[:limit])]
+    df = df.reset_index(drop=True)
+    print(f"stage-1 pool: {n0} rows (min_labels {min_labels}) -> {len(df)} rows in {df['prompt_group_id'].nunique()} "
+          f"blocks after dropping topic-matched blocks and blocks under 3 rows", flush=True)
+    return df
+
+
+def class_weights(y):
+    """Per-class cross-entropy weights n / (K n_c): every class carries the same total weight."""
+    cnt = np.bincount(y, minlength=len(CLASSES)).astype(float)
+    return np.where(cnt > 0, len(y) / (len(CLASSES) * np.maximum(cnt, 1)), 0.0)
+
+
+def run_job(a, name, d, rank=0, world=1):
+    """Train one job. d: ids / y / groups / folds of the official rows, and pool_ids / pool_y / pool_groups for
+    the stage-1 job 'pre'. Under --ddp every process runs this with its rank; process 0 writes the outputs."""
     import torch
-    fit = np.flatnonzero(folds != int(name[1:])) if name != "final" else np.arange(len(y))
-    valid = np.flatnonzero(folds == int(name[1:])) if name != "final" else np.zeros(0, int)
+    dist = None
+    if world > 1:
+        import torch.distributed as dist
+    if name == "pre":
+        ids, y, groups = d["pool_ids"], d["pool_y"], d["pool_groups"]
+        fit, valid = np.arange(len(y)), np.zeros(0, int)
+        epochs, lr, head_lr, init = a.pre_epochs, a.pre_lr, a.pre_head_lr, None
+        weight = class_weights(y)
+    else:
+        ids, y, groups, folds = d["ids"], d["y"], d["groups"], d["folds"]
+        fit = np.flatnonzero(folds != int(name[1:])) if name != "final" else np.arange(len(y))
+        valid = np.flatnonzero(folds == int(name[1:])) if name != "final" else np.zeros(0, int)
+        epochs, lr, head_lr, weight = a.epochs, a.lr, a.head_lr, None
+        init = Path(a.out) / "pre" if a.init_pre else None
+        if init is not None:
+            assert (init / "COMPLETE.json").exists(), f"{init}: stage-1 job not complete"
     assert not set(groups[fit]) & set(groups[valid]), "prompt overlap between fit and held-out rows"
     out = Path(a.out) / name
     assert not (out / "COMPLETE.json").exists(), f"{out} already complete (no silent re-use)"
-    out.mkdir(parents=True, exist_ok=True)
+    if rank == 0:
+        out.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     rng = np.random.default_rng(a.seed)
-    plan = [epoch_triples(fit, groups, rng) for _ in range(a.epochs)]
+    plan = [epoch_triples(fit, groups, rng) for _ in range(epochs)]
     total = sum(len(p) // 6 for p in plan)
-    device = torch.device(a.device if a.device == "cpu" else "cuda:0")
+    if a.device == "cpu":
+        device = torch.device("cpu")
+    else:
+        device = torch.device(f"cuda:{int(os.environ.get('LOCAL_RANK', 0))}" if world > 1 else "cuda:0")
     t0 = time.time()
     net = Lora24(a.model_dir, a.n_layers, [l for l in POOL_LAYERS if l <= a.n_layers], device,
-                 torch.float16 if device.type == "cuda" else torch.float32)
-    print(f"[{name}] loaded in {time.time() - t0:.0f}s; fit {len(fit)} rows, held out {len(valid)}, "
-          f"{total} updates", flush=True)
+                 torch.float16 if device.type == "cuda" else torch.float32, init=init)
     adapter = [p for p in net.model.parameters() if p.requires_grad]
     heads = list(net.norms.parameters()) + list(net.plain.parameters()) + list(net.centered.parameters())
     params = adapter + heads
-    opt = torch.optim.AdamW([{"params": adapter, "lr": a.lr}, {"params": heads, "lr": a.head_lr}], weight_decay=0.01)
+    if world > 1:                                    # identical start on every process
+        for p in params:
+            dist.broadcast(p.data, 0)
+    wt = torch.as_tensor(weight, dtype=torch.float32, device=device) if weight is not None else None
+    print(f"[{name}] rank {rank}/{world}: loaded in {time.time() - t0:.0f}s; fit {len(fit)} rows, held out "
+          f"{len(valid)}, {total} updates, {epochs} epochs, lr {lr:g} / {head_lr:g}"
+          f"{', init ' + str(init) if init else ''}{', class-weighted' if wt is not None else ''}", flush=True)
+    opt = torch.optim.AdamW([{"params": adapter, "lr": lr}, {"params": heads, "lr": head_lr}], weight_decay=0.01)
     warm = max(1, int(0.1 * total))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: (s + 1) / warm if s < warm else
                                               0.5 * (1 + math.cos(math.pi * min(1.0, (s - warm) / max(1, total - warm)))))
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", init_scale=256.0, growth_interval=1_000_000, enabled=use_amp)
-    log = {"job": name, "fit_rows": int(len(fit)), "valid_rows": int(len(valid)), "updates": total, "epochs": a.epochs,
-           "n_layers": a.n_layers, "pool_layers": net.layers, "max_len": a.max_len, "lr": a.lr, "head_lr": a.head_lr,
-           "seed": a.seed, "history": [], "overflow_retries": 0}
+    log = {"job": name, "fit_rows": int(len(fit)), "valid_rows": int(len(valid)), "updates": total, "epochs": epochs,
+           "n_layers": a.n_layers, "pool_layers": net.layers, "max_len": a.max_len, "lr": lr, "head_lr": head_lr,
+           "seed": a.seed, "init": str(init) if init else None, "class_weighted": wt is not None, "world": world,
+           "micro": a.micro, "history": [], "overflow_retries": 0, "truncated": False}
     net.model.train()
     net.norms.train()
     net.plain.train()
     net.centered.train()
     step, t1 = 0, time.time()
+    stop = False
     for ep, triples in enumerate(plan):
         for s in range(0, len(triples), 6):
             group = triples[s:s + 6]
+            mine = group[rank::world]                # this process's share of the update's triples
             for attempt in range(4):                 # redo an overflowing update with half the scale (<= 3 times)
                 opt.zero_grad(set_to_none=True)
                 stats = []
-                for t in group:
-                    loss, lp, lc, n_tok = net.loss([ids[i] for i in t], y[t])
-                    scaler.scale(loss / len(group)).backward()
+                for m in range(0, len(mine), a.micro):
+                    chunk = mine[m:m + a.micro]
+                    rows = np.concatenate(chunk)
+                    loss, lp, lc, n_tok = net.loss([ids[i] for i in rows], y[rows], wt)
+                    scaler.scale(loss * len(chunk) / len(group)).backward()
                     stats.append((lp, lc, n_tok))
+                if world > 1:                        # sum of the processes' gradients = one-process gradient
+                    for p in params:
+                        if p.grad is None:
+                            p.grad = torch.zeros_like(p)
+                    flat = torch.cat([p.grad.reshape(-1) for p in params])
+                    dist.all_reduce(flat)
+                    o = 0
+                    for p in params:
+                        p.grad.copy_(flat[o:o + p.numel()].view_as(p))
+                        o += p.numel()
                 if use_amp:
                     scaler.unscale_(opt)
                     finite = all(p.grad is None or bool(torch.isfinite(p.grad).all()) for p in params)
@@ -207,7 +303,21 @@ def run_job(a, name, ids, y, groups, folds):
                      "center": float(np.mean([x[1] for x in stats])), "grad_norm": gn,
                      "seconds": round(time.time() - t1, 1)}
                 log["history"].append(h)
-                print(f"[{name}] {json.dumps(h)}", flush=True)
+                if rank == 0:
+                    print(f"[{name}] {json.dumps(h)}", flush=True)
+            if a.max_seconds:                        # wall-clock cap: process 0 decides for everyone
+                flag = torch.tensor([float(time.time() - t0 > a.max_seconds)], device=device)
+                if world > 1:
+                    dist.broadcast(flag, 0)
+                stop = bool(flag.item())
+            if stop:
+                break
+        if stop:
+            log["truncated"] = True
+            if rank == 0:
+                print(f"[{name}] TIME CAP {a.max_seconds}s reached after {step}/{total} updates", flush=True)
+            break
+    log["updates_done"] = step
     log["train_seconds"] = round(time.time() - t1, 1)
     net.model.eval()
     net.norms.eval()
@@ -215,24 +325,28 @@ def run_job(a, name, ids, y, groups, folds):
     net.centered.eval()
     if hasattr(net.model, "gradient_checkpointing_disable"):
         net.model.gradient_checkpointing_disable()
-    if len(valid):
-        Z = net.features([ids[i] for i in valid])
-        np.save(out / "valid_features.npy", Z.astype(np.float16))
-        np.save(out / "valid_idx.npy", valid)
-    np.save(out / "anchor_features.npy", net.features([ids[i] for i in range(3)]))
-    np.savez(out / "readouts.npz", classes=np.array(CLASSES), pool_layers=np.array(net.layers),
-             plain_coef=net.plain.weight.detach().cpu().numpy(), plain_intercept=net.plain.bias.detach().cpu().numpy(),
-             center_coef=net.centered.weight.detach().cpu().numpy(),
-             center_intercept=net.centered.bias.detach().cpu().numpy())
-    net.model.save_pretrained(out / "adapter")
-    torch.save({"norms": net.norms.state_dict(), "plain": net.plain.state_dict(),
-                "centered": net.centered.state_dict()}, out / "heads.pt")
-    if device.type == "cuda":
-        log["peak_gib"] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
-    log["total_seconds"] = round(time.time() - t0, 1)
-    (out / "log.json").write_text(json.dumps(log, indent=1))
-    (out / "COMPLETE.json").write_text(json.dumps({"job": name, "updates": step}))
-    print(f"[{name}] COMPLETE in {log['total_seconds']}s", flush=True)
+    if rank == 0:
+        if len(valid):
+            Z = net.features([ids[i] for i in valid])
+            np.save(out / "valid_features.npy", Z.astype(np.float16))
+            np.save(out / "valid_idx.npy", valid)
+        np.save(out / "anchor_features.npy", net.features([d["ids"][i] for i in range(3)]))   # official rows 0..2
+        np.savez(out / "readouts.npz", classes=np.array(CLASSES), pool_layers=np.array(net.layers),
+                 plain_coef=net.plain.weight.detach().cpu().numpy(),
+                 plain_intercept=net.plain.bias.detach().cpu().numpy(),
+                 center_coef=net.centered.weight.detach().cpu().numpy(),
+                 center_intercept=net.centered.bias.detach().cpu().numpy())
+        net.model.save_pretrained(out / "adapter")
+        torch.save({"norms": net.norms.state_dict(), "plain": net.plain.state_dict(),
+                    "centered": net.centered.state_dict()}, out / "heads.pt")
+        if device.type == "cuda":
+            log["peak_gib"] = round(torch.cuda.max_memory_allocated(device) / 2 ** 30, 2)
+        log["total_seconds"] = round(time.time() - t0, 1)
+        (out / "log.json").write_text(json.dumps(log, indent=1))
+        (out / "COMPLETE.json").write_text(json.dumps({"job": name, "updates": step, "truncated": log["truncated"]}))
+        print(f"[{name}] COMPLETE in {log['total_seconds']}s", flush=True)
+    if world > 1:
+        dist.barrier()                               # the next job may read this job's outputs
     del net, opt, scaler
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -255,22 +369,47 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     ap.add_argument("--limit", type=int, default=0, help="SMOKE TEST ONLY: keep the first N prompts' rows")
+    ap.add_argument("--micro", type=int, default=1, help="triples per forward pass")
+    ap.add_argument("--max-seconds", type=float, default=0, help="wall-clock cap of each job (0: none)")
+    ap.add_argument("--ddp", action="store_true", help="torchrun: every job on all processes, gradients summed")
+    ap.add_argument("--init-pre", action="store_true", help="fold jobs start from <out>/pre (two-stage)")
+    ap.add_argument("--pool-min-labels", type=int, default=10, help="job 'pre': minimum labels per pool block")
+    ap.add_argument("--pool-limit", type=int, default=0, help="SMOKE TEST ONLY: keep the first N pool blocks")
+    ap.add_argument("--pool-sha", default="", help="expected sha256 of the pool file")
+    ap.add_argument("--pre-epochs", type=int, default=1)
+    ap.add_argument("--pre-lr", type=float, default=1e-4)
+    ap.add_argument("--pre-head-lr", type=float, default=1e-3)
     a = ap.parse_args()
+    rank, world = 0, 1
+    if a.ddp:
+        import torch
+        import torch.distributed as dist
+        dist.init_process_group("nccl" if a.device == "cuda" else "gloo")
+        rank, world = dist.get_rank(), dist.get_world_size()
+        if a.device == "cuda":
+            torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
     tr = pd.read_csv(a.train)
     fd = pd.read_csv(a.folds_csv)
     assert (fd["id"].values == tr["id"].values).all(), "folds.csv does not match train.csv row order"
     if a.limit:
         keep = tr["prompt_id"].isin(tr["prompt_id"].drop_duplicates().iloc[:a.limit])
         tr, fd = tr[keep].reset_index(drop=True), fd[keep].reset_index(drop=True)
-    y = tr["model"].map({c: i for i, c in enumerate(CLASSES)}).to_numpy()
-    groups, folds = tr["prompt_id"].astype(str).to_numpy(), fd["fold"].to_numpy()
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(a.model_dir, local_files_only=True)
-    ids = tokenize(tok, tr["text"].tolist(), a.max_len)
-    jobs = a.jobs.split(",")[a.worker::a.workers]
-    print(f"worker {a.worker}/{a.workers}: jobs {jobs}; {len(tr)} rows", flush=True)
+    d = {"ids": tokenize(tok, tr["text"].tolist(), a.max_len),
+         "y": tr["model"].map({c: i for i, c in enumerate(CLASSES)}).to_numpy(),
+         "groups": tr["prompt_id"].astype(str).to_numpy(), "folds": fd["fold"].to_numpy()}
+    jobs = a.jobs.split(",") if a.ddp else a.jobs.split(",")[a.worker::a.workers]
+    if "pre" in jobs:
+        pool = pool_rows(a.train, a.pool_min_labels, a.pool_limit, a.pool_sha)
+        d.update(pool_ids=tokenize(tok, pool["text"].tolist(), a.max_len),
+                 pool_y=pool["label"].map({c: i for i, c in enumerate(CLASSES)}).to_numpy(),
+                 pool_groups=pool["prompt_group_id"].astype(str).to_numpy())
+    print(f"rank {rank}/{world}, worker {a.worker}/{a.workers}: jobs {jobs}; {len(tr)} official rows", flush=True)
     for name in jobs:
-        run_job(a, name, ids, y, groups, folds)
+        run_job(a, name, d, rank, world)
+    if a.ddp:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
