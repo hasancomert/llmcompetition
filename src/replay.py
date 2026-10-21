@@ -20,6 +20,10 @@ Recipes (CV = nested, EXPERIMENTS.md):
         5 CC BY 4.0 Kaggle datasets attached as inputs; weight 0.3, class-balanced, training folds only) and (b) test-set
         standardization of the 12-layer LM members and specialists (held-out fold / test rows scaled by their own
         statistics). Combiner CV 0.4719 -> 0.4871 (+0.015 [+0.003, +0.027]); twins as in v6
+  v7g   v7 + shared-prompt Gaussian group evidence of the same two views on the same test clusters (gauss_twins.py,
+        weight 0.25, T 3) + one-to-one model assignment inside test clusters of 3..18 texts ("hungarian": 3, on the
+        final log-posteriors). Simulated on held-out prompts (EXPERIMENTS gauss_sim_*): over the twins alone +0.009
+        (1-2 texts per prompt), +0.013 (1-5), +0.012 (2-4), +0.024 (3-8), +0.090 (18)
 
 External training rows (extdata.py; OFF by default, cpu2 only): --ext ntl_short --ext-weight W re-runs the CPU members
 with the external corpus rows added to their training folds (member tags get the extdata suffix; blend weights stay
@@ -116,6 +120,8 @@ STEPS["famc_super_v7"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts"])
 STEPS["twins_l12"] = ({}, "adaptive_twins.py", ["--views", "qwen3_8b_base_l12,qwen3_4b_base_l12", "--C", "0.001",
                                                  "--thr", "0.85", "--tag", "twins_l12"])
+STEPS["gauss_l12"] = ({}, "gauss_twins.py", ["--views", "qwen3_8b_base_l12;qwen3_4b_base_l12", "--T", "3",
+                                              "--thr", "0.85", "--tag", "gauss_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "--specs", "sup_emb_qwen3_8b_base_l12_C0.0003", "sup_emb_qwen3_4b_base_l12_C0.0003", "sup_lpstyle_C0.03",
     "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T",
@@ -155,6 +161,15 @@ RECIPES = {
            "weights": {"famcsup6_l12_pub03_ts": 1.0},
            "twins": {"twins_l12": 0.5},
            "cv": 0.4871},
+    "v7g": {"needs_lm": True, "lm_extra": LM_L12,
+            "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"]],
+                       [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                          "spec_super_ng@1", "twins_l12@1"], ["gauss_l12@1"]],
+                       [["famc_super_v7"]]],
+            "weights": {"famcsup6_l12_pub03_ts": 1.0},
+            "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
+            "hungarian": 3,
+            "cv": 0.4871},
 }
 
 
@@ -348,12 +363,23 @@ def main():
         log(f"in-kernel OOF BA of the fixed-weight blend: {metrics.balanced_accuracy(y, np.eye(K)[oof_pred]):.4f} "
             f"(local nested CV {rec['cv']})", t0)
         pred, z = blend(tests)
+        clusters = None
         for tag, wt in rec.get("twins", {}).items():          # test-time adaptive centering (no labels used)
             tw = np.load(ROOT / "outputs" / "twins" / f"{tag}.npz")
+            assert clusters is None or (tw["clusters"] == clusters).all(), "twin files with different clusterings"
+            clusters = tw["clusters"]
             z = z + wt * tw["evidence"]
             pred = z.argmax(1)
             log(f"twins {tag}: weight {wt} on {int(tw['adapt'].sum())} of {len(z)} test texts; "
                 f"{int((pred != blend(tests)[0]).sum())} predictions changed", t0)
+        if rec.get("hungarian"):                              # one model per text inside each test cluster of m..18
+            from adaptive_sim import hungarian
+            assert clusters is not None, "hungarian needs the twins' test clusters"
+            before = pred
+            pred = hungarian(z, clusters, rec["hungarian"], 18)
+            sizes = np.bincount(clusters)[clusters]
+            log(f"hungarian: {int(((sizes >= rec['hungarian']) & (sizes <= 18)).sum())} test texts in clusters of "
+                f"{rec['hungarian']}..18; {int((pred != before).sum())} predictions changed", t0)
         labels = np.asarray(CLASSES)[pred]
     except Exception as e:
         if a.no_fallback:
