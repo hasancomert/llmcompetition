@@ -427,16 +427,19 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Kazanç: 1–2 +0.0006, 1–5 +0.007, 2–4 +0.002, 3–8 +0.0135, 1–18 +0.057, 9–18 +0.059, 18 +0.082.
     - Hiçbir yapıda zarar yok. m = 4 her yapıda en iyisi (6/9/12 daha az).
     - Eskiden başarısız olan yumuşak eşleştirmeden farkı: güncel kümeleme (0.85) ve yalnız büyük kümeler.
-  - Gaussian grup kafası (`gauss_head.py`): çift ve üçlü sonsalı brute-force integral ile birebir. Benzetim sürüyor.
+  - Gaussian grup kafası (`gauss_head.py`; çift ve üçlü sonsalı brute-force integral ile birebir), satır 599–603.
+    - İkizlerin üstüne Gaussian (w 0.25, T 3) + Hungarian (≥3 metinlik kümeler).
+    - İkizlere göre kazanç: 1–2 +0.009, 1–5 +0.013, 2–4 +0.012, 3–8 +0.024, 18 +0.090.
+    - Her yapıda olumlu; en kötü durumu en iyi olan ayar seçildi.
+    - Gaussian tek başına (ikizsiz) 2–4'te ikizlerden kötü: ikizlerin yerine değil, yanına.
   - Havuzla CPU üyeleri (`--ext pool`): CV sürüyor.
 - Alınacaklar (öncelik sırasıyla):
   1. İki aşamalı LoRA (GPU). Kod hazır:
      - `gpu_lora24.py`'de 'pre' işi: havuz, sızıntılı bloklar atılı, sınıf ağırlıklı.
      - Fold işleri 'pre'den başlıyor (`--init-pre`); iki T4'te DDP.
      - CPU duman testi, Kaggle CPU slotu boşalınca yapılacak (21 Ekim'de 5 slotu da başka proje kullanıyordu).
-  2. Hungarian m = 4 (v8 ile).
+  2. Gaussian grup kafası + Hungarian m = 3: replay tarifi `v7g` hazır (`gauss_twins.py`); v8'in parçası.
   3. Havuz satırlarıyla CPU üyeleri (CV kazancı varsa).
-  4. Gaussian grup kafası (benzetimde kazanç varsa).
   - Alınmayanlar:
     - ATLAS: metin başına 18 geçiş, kazanç +0.007.
     - OLMo2 / SmolLM3 / 27B: pahalı, kazanç küçük.
@@ -447,7 +450,7 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
      - 2. aşama: 5 fold × 2 epoch, iki T4'te DDP.
      - Tahmin ~2.6 sa (probe2 hızından), sert sınır 3.5 sa.
   2. `nllm-gpu-embed-ext` (~0.7 sa).
-  3. v8 gönderimi (~1.3–1.7 sa): v7 + LoRA üyesi ve ikizi + Hungarian m = 4.
+  3. v8 gönderimi (~1.3–1.7 sa): v7g (Gaussian + Hungarian m = 3) + LoRA üyesi ve ikizi.
   - 8B iki aşamalı LoRA 31 Ekim haftasına kalıyor: S6E10 kapanıyor, kota tamamen NLLM'e.
   - Eski plandaki "yalnız resmi veriyle 8B LoRA24" (~4.5 sa) bırakılıyor. Public CV'ye göre 1. aşamasız LoRA ~0.48,
     iki aşamalı 0.569.
