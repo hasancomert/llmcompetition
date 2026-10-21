@@ -162,10 +162,13 @@ RECIPES = {
            "twins": {"twins_l12": 0.5},
            "cv": 0.4871},
     "v7g": {"needs_lm": True, "lm_extra": LM_L12,
+            # gauss_l12 in a stage of its own (memory: the 2-chain stage 2 of v7 is the peak; local e2e replay
+            # on a 539-text pseudo test: gauss 2.1 GB, whole replay 10.3 GB)
             "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"]],
                        [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
-                                          "spec_super_ng@1", "twins_l12@1"], ["gauss_l12@1"]],
-                       [["famc_super_v7"]]],
+                                          "spec_super_ng@1", "twins_l12@1"]],
+                       [["famc_super_v7"]],
+                       [["gauss_l12"]]],
             "weights": {"famcsup6_l12_pub03_ts": 1.0},
             "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
             "hungarian": 3,
