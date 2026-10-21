@@ -26,6 +26,7 @@ from ext_corpus import clean_text
 
 D = ROOT / "data" / "external" / "pools" / "prvsiyan"
 FILE = "pool_v1.parquet"
+SHA256 = "4ae4f9b5ead5af3471e6f1e103e1b3add2af170d924a83d2c74ac7a8646489dc"   # the version every local CV used
 
 
 def _find(root: Path) -> Path:
@@ -41,7 +42,12 @@ def _find(root: Path) -> Path:
 
 def load(min_words: int = 40, max_words: int = 250, min_labels: int = 10, root=None) -> pd.DataFrame:
     """Rows: ext_id, label, text, words, source, prompt_id, prompt_group_id, license_class."""
-    df = pd.read_parquet(_find(Path(root) if root else D))
+    path = _find(Path(root) if root else D)
+    if root:                                          # an attached copy (notebook): say if it is another version
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        print(f"[ext_pool] {path} sha256 {sha[:12]}" + ("" if sha == SHA256 else
+              f"  WARNING: differs from the version of the local CV ({SHA256[:12]})"), flush=True)
+    df = pd.read_parquet(path)
     df = df[df["model"].isin(CLASSES) & df["text"].notna()].rename(columns={"model": "label"}).copy()
     df["prompt_id"] = df["prompt_id"].astype(str)
     df["text"] = df["text"].astype(str).map(clean_text)

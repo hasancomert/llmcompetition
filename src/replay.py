@@ -120,6 +120,17 @@ STEPS["famc_super_v7"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts"])
 STEPS["twins_l12"] = ({}, "adaptive_twins.py", ["--views", "qwen3_8b_base_l12,qwen3_4b_base_l12", "--C", "0.001",
                                                  "--thr", "0.85", "--tag", "twins_l12"])
+# the 4-view n-gram SVC of the public two-stage notebook, trained with the public passage pool (ext_pool.py; weight 1,
+# class-balanced, training folds only; EXPERIMENTS row 606: 0.4101; in the v7 combiner 0.4871 -> 0.5030)
+STEPS["ng4_pool"] = ({}, "train_ngram.py", ["--feats", "char+word13+shapec+fw", "--stream-weights", "1,0.7,0.5,0.5",
+                                            "--model", "svc", "--C", "0.5", "--save", "--n-jobs", "2", "--ext", "pool",
+                                            "--ext-balance", "--ext-weight", "1.0"])
+STEPS["famc_super_v7p"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+    "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
+    "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
+    "ng_char-word13-shapec-fw_svc_C0.5_w1_0.7_0.5_0.5_ext-pool-w1-bal",
+    "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
+    "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts_ng4pool"])
 STEPS["gauss_l12"] = ({}, "gauss_twins.py", ["--views", "qwen3_8b_base_l12;qwen3_4b_base_l12", "--T", "3",
                                               "--thr", "0.85", "--tag", "gauss_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
@@ -173,6 +184,17 @@ RECIPES = {
             "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
             "hungarian": 3,
             "cv": 0.4871},
+    "v7p": {"needs_lm": True, "lm_extra": LM_L12, "needs_pool": True,
+            # v7g + the 4-view n-gram SVC with the public pool in the super combiner (CV 0.4871 -> 0.5030)
+            "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"], ["ng4_pool"]],
+                       [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                          "spec_super_ng@1", "twins_l12@1"]],
+                       [["famc_super_v7p"]],
+                       [["gauss_l12"]]],
+            "weights": {"famcsup6_l12_pub03_ts_ng4pool": 1.0},
+            "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
+            "hungarian": 3,
+            "cv": 0.5030},
 }
 
 
@@ -269,11 +291,25 @@ def find_pub_dir(spec: str) -> str:
     return "/kaggle/input" if glob.glob("/kaggle/input/**/passages_clean.csv", recursive=True) else ""
 
 
+def find_pool_dir(spec: str) -> str:
+    """Directory of the attached public passage pool (ext_pool.py), '' locally (data/external/pools/prvsiyan)."""
+    if spec != "auto":
+        return spec
+    hits = sorted(p for p in glob.glob("/kaggle/input/**/pool_v1.parquet", recursive=True)
+                  if "ntl-public-in-style-pool" in p)
+    return os.path.dirname(hits[0]) if hits else ""
+
+
+POOL_DIR = ""                                        # set in main(); run_step passes it to --ext pool steps
+
+
 def run_step(key, t0, extra=(), pub_dir="", threads=None):
     env_over, script, args = STEPS[key]
     args = list(args) + list(extra)
     if pub_dir and "pub" in args and "--ext" in args:
         args += ["--ext-dir", pub_dir]
+    if POOL_DIR and "pool" in args and "--ext" in args:
+        args += ["--ext-dir", POOL_DIR]
     env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), NLLM_KGRAM_CACHE="0", **env_over)
     if threads:                                     # steps running side by side (recipe stages): fixed thread budgets
         env.update(OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads), MKL_NUM_THREADS=str(threads))
@@ -328,6 +364,8 @@ def main():
     ap.add_argument("--ext-dir", default="auto")
     ap.add_argument("--pub-dir", default="auto", help="root of the attached public passage datasets (auto: /kaggle/input "
                                                        "when they are attached, else the local data/external/pub)")
+    ap.add_argument("--pool-dir", default="auto", help="directory of the attached public passage pool (auto: found under "
+                                                        "/kaggle/input, else the local data/external/pools/prvsiyan)")
     a = ap.parse_args()
     t0 = time.time()
     rec = RECIPES[a.recipe]
@@ -340,6 +378,10 @@ def main():
         log(f"EXTERNAL training rows ON: {' '.join(ext_args)}", t0)
     tr, te = setup_project(a, t0)
     pub_dir = find_pub_dir(a.pub_dir)
+    global POOL_DIR
+    POOL_DIR = find_pool_dir(a.pool_dir)
+    if rec.get("needs_pool"):
+        log(f"public passage pool read from {POOL_DIR or 'data/external/pools/prvsiyan (local)'}", t0)
     try:
         if any("pub" in STEPS[k][2] for k in recipe_steps(rec)):
             log(f"public generated passages read from {pub_dir or 'data/external/pub (local)'}", t0)

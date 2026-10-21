@@ -57,10 +57,12 @@ EXT_DATASET = "olegzholobov/name-that-llm-response-corpus"   # attached as an in
 PUB_DATASETS = ["prvsiyan/prvsiyans-extended-name-that-llm-dataset", "seyitkaangunes/ntl-extra-api-passages",
                 "lucasboesen/ntl-free-proxy-generations", "dophuchung/ntl-proxy-generations",
                 "abdullah1afify/ntl-generations"]
+POOL_DATASET = "prvsiyan/ntl-public-in-style-pool-v1"   # public passage pool (CC BY-SA 4.0; ext_pool.py), --ext pool steps
 
 
 def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: list | None = None,
-          ext_dataset: bool = False, pub_datasets: bool = False, kernel_sources: list | None = None) -> Path:
+          ext_dataset: bool = False, pub_datasets: bool = False, kernel_sources: list | None = None,
+          pool_dataset: bool = False) -> Path:
     files = code_files()
     payload = {rel: base64.b64encode(p.read_bytes()).decode() for rel, p in files.items()}
     sha = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
@@ -87,7 +89,8 @@ def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: lis
             "kernel_type": "notebook", "is_private": True, "enable_gpu": gpu, "enable_internet": False,
             "competition_sources": ["name-that-llm"],
             "dataset_sources": [f"{USER}/nllm-tokenizers", f"{USER}/nllm-folds"] + ([f"{USER}/nllm-lmfeats"] if gpu else [])
-                               + ([EXT_DATASET] if ext_dataset else []) + (PUB_DATASETS if pub_datasets else []),
+                               + ([EXT_DATASET] if ext_dataset else []) + (PUB_DATASETS if pub_datasets else [])
+                               + ([POOL_DATASET] if pool_dataset else []),
             "model_sources": GPU_MODELS if gpu else [], "kernel_sources": list(kernel_sources or [])}
     if gpu:
         meta["machine_shape"] = "NvidiaTeslaT4"
@@ -108,12 +111,13 @@ if __name__ == "__main__":
     ap.add_argument("--kernel-sources", default="",
                     help="comma-separated private kernel outputs to attach (e.g. hasancmert/nllm-gpu-embed-ext: LM "
                          "features of the public passages, linked by replay.setup_lm)")
+    ap.add_argument("--pool-dataset", action="store_true", help="attach the public passage pool (recipe v7p and later)")
     ap.add_argument("--pub-datasets", action="store_true",
                     help="attach the public generated-passage datasets (recipes with *_pub steps; never re-uploaded)")
     a = ap.parse_args()
     if "--ext" in a.extra.split() and not a.ext_dataset:
         ap.error("--extra uses --ext: add --ext-dataset so the corpus is attached as a notebook input")
     d = build(a.gpu, a.slug, a.pipeline, a.extra.split(), a.ext_dataset, a.pub_datasets,
-              [k for k in a.kernel_sources.split(",") if k])
+              [k for k in a.kernel_sources.split(",") if k], pool_dataset=a.pool_dataset)
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)
