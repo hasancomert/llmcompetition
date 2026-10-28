@@ -616,6 +616,20 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   - Zamanlanmış görev (`trig_01QPMvJH5scmKNDHHNvE1KQz`, 24 Ekim 00:30 UTC): kota sıfırlanınca bu planı başlatır (önce kernel listesiyle S6E10 slotları kontrol edilir).
     21 Ekim: istemi yeni plana göre güncellendi; kullanıcı planı aynı gün onayladı (iki aşamalı 4B LoRA, ext-embed, v8).
     23 Ekim 22:13 UTC: kullanıcı 2 gün ara istedi ("Önümüzdeki 2 gün bir şey yapma"). Görev 25 Ekim 22:30 UTC'ye alındı; o zaman da işe kendiliğinden başlamaz, önce kullanıcıya sorar (GPU planına devam ve GPU kiralama kararı).
+- Kullanıcı kararları (28 Ekim): bu hafta GPU kullanılmıyor, 31 Ekim'deki kota sıfırlanması bekleniyor. GPU kiralama yok;
+  bütün eğitim Kaggle'da. S6E10 31 Ekim'de bitiyor; ondan sonra haftalık 30 saatin tamamı NLLM'e kalıyor.
+- GPU planı, 31 Ekim haftası (~30 sa, yalnız Kaggle T4; sıra):
+  1. Kernel listesiyle S6E10'un son koşularına bakılır; slotlarına dokunulmaz.
+  2. v7p gönderimi (~1–1.5 sa): `python kaggle/build_submission.py --gpu --pipeline replay.py --extra "--recipe v7p"
+     --pub-datasets --pool-dataset --push`, COMPLETE olunca yarışmaya gönderilir. LB, Gaussian + Hungarian ve havuz
+     SVC'sinin gizli testteki etkisini de gösterir.
+  3. İki aşamalı 4B LoRA (`--slug nllm-lora2s --two-stage --hint 4b-base --budget-h 3.75`).
+  4. İki aşamalı 8B LoRA (`--slug nllm-lora2s8 --two-stage --hint 8b-base --micro 1 --pre-max-h 2.5 --fold-max-h 0.6
+     --budget-h 6`; T4'te 8B için üçlü başına bir ileri geçiş).
+  5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
+     replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
+  6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
+  - Gerçek GPU saatleri bu bölüme işlenir.
 - 24 Ekim sonrası GPU planı (hazır kod):
   1. `nllm-gpu-embed-ext` (hazır, push'lanmadı): 7.700 public pasajın LM öznitelikleri. 0.6B / 1.7B 4 katman, 4B / 8B
      12 katman. Tahmin ~0.6–0.8 GPU-saat. Sonra CPU'da: dış veriyle LM üyeleri (`train_emb --ext pub`), uzmanlar

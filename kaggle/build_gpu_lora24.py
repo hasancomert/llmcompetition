@@ -45,6 +45,7 @@ if __name__ == "__main__":
     ap.add_argument("--pool-min-labels", type=int, default=10)
     ap.add_argument("--pre-max-h", type=float, default=1.5, help="two-stage: wall-clock cap of stage 1 (job 'pre')")
     ap.add_argument("--fold-max-h", type=float, default=0.42, help="two-stage: wall-clock cap of each fold job")
+    ap.add_argument("--micro", type=int, default=3, help="two-stage: triples per forward pass (8B on a T4: 1)")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--fetch", action="store_true")
     a = ap.parse_args()
@@ -91,7 +92,7 @@ if __name__ == "__main__":
                                                                        "ev/cv_preds.py")})
         datasets.append("prvsiyan/ntl-public-in-style-pool-v1")
         links = [("pool_v1.parquet", "ntl-public-in-style-pool", "data/external/pools/prvsiyan/pool_v1.parquet")]
-        args = (f"--jobs pre,f0,f1,f2,f3,f4 --init-pre --epochs 2 --lr 5e-5 --head-lr 5e-4 --micro 3 "
+        args = (f"--jobs pre,f0,f1,f2,f3,f4 --init-pre --epochs 2 --lr 5e-5 --head-lr 5e-4 --micro {a.micro} "
                 f"--pool-min-labels {a.pool_min_labels} --pool-sha {sha} "
                 f"--pre-max-seconds {a.pre_max_h * 3600:.0f} --max-seconds {a.fold_max_h * 3600:.0f}")
         env = "LORA24_DDP=1 "
