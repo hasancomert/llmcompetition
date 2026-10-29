@@ -675,6 +675,15 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
       DDP (gloo, iki süreç, ağırlık farkı 0.0), f0 1. aşamadan başladı. v2'de kısa sınır zorlandı: 34 sn/güncelleme
       ölçüldü, takvim 23'ten 11 güncellemeye indi ve 1. aşama 396 sn'lik sınırın içinde (386 sn) bitti.
     - LoRA üyeleri yalnız CV'leri artırırsa gönderime girer (kural).
+- Kullanıcı kararı (29 Ekim, ~16:30 UTC): "gpuyu kullanabilirsin". Kota (`KaggleApi().quota_view()`): bu hafta 30
+  saatin 3,0 saati kullanılmış, 27 saat kalmış, sıfırlanma 31 Ekim 00:00 UTC. Kullanılmayan saat sıfırlanınca
+  yanacağı için plan 29 Ekim'e çekildi:
+  - 16:39 `nllm-submit-gpu` v6 (v7p, ucuz commit). Kayıt koşusu 36 sn: denetimlerin hepsi ok. Havuz sha'sı tuttu,
+    4 LM ve train LM öznitelikleri bulundu, 2 × T4. Paket sürümleri 15 Ekim'deki ortamla aynı (sklearn 1.6.1,
+    numpy 2.1.3). 16:41'de gönderildi (ref 57777088).
+  - 16:39 `nllm-lora2s58` (8B, havuz v5, sınır 9 sa) ve 16:41 `nllm-lora2s5` (4B, havuz v5, sınır 5,5 sa) push'landı.
+  - 31 Ekim görevi buna göre değişti: bu işleri yeniden başlatmıyor; sonuçları topluyor, üyeleri ve CV'yi kuruyor,
+    yeni haftanın 30 saatini sonuçlara göre planlıyor.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
