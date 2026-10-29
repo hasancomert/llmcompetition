@@ -684,6 +684,12 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   - 16:39 `nllm-lora2s58` (8B, havuz v5, sınır 9 sa) ve 16:41 `nllm-lora2s5` (4B, havuz v5, sınır 5,5 sa) push'landı.
   - 31 Ekim görevi buna göre değişti: bu işleri yeniden başlatmıyor; sonuçları topluyor, üyeleri ve CV'yi kuruyor,
     yeni haftanın 30 saatini sonuçlara göre planlıyor.
+  - Aynı gün CPU'da 120 binlik havuzun etkisi ölçüldü (EXPERIMENTS 624–627). 4 görünümlü SVC 0.4101'den 0.4649'a,
+    v7p birleştiricisi 0.5030'dan 0.5405'e çıktı. Tarif `v7q` = v7p + havuz v5'li SVC.
+    - Kaggle aynı anda en fazla 2 toplu GPU oturumu açıyor; ikisi LoRA'larda.
+    - Arka plandaki bir betik (`scratchpad/push_v7q_when_free.sh`) 4B LoRA bitince v7q'yu ucuz commit'le push'luyor,
+      kayıt koşusunun denetimlerini kontrol edip gönderiyor (log: `scratchpad/push_v7q.log`).
+    - Yeniden koşu tahmini ~4,8 sa, sınır 9 sa; SVC ayrı aşamada tek başına koşuyor (~14 GB).
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
