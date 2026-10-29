@@ -69,11 +69,12 @@ PUB_DATASETS = ["prvsiyan/prvsiyans-extended-name-that-llm-dataset", "seyitkaang
                 "lucasboesen/ntl-free-proxy-generations", "dophuchung/ntl-proxy-generations",
                 "abdullah1afify/ntl-generations"]
 POOL_DATASET = "prvsiyan/ntl-public-in-style-pool-v1"   # public passage pool (CC BY-SA 4.0; ext_pool.py), --ext pool steps
+POOL5_DATASET = "dhruvtibarewal/nlm-matched-clean"       # 120k pool (per-row licences; ext_pool5.py), --ext pool5 steps
 
 
 def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: list | None = None,
           ext_dataset: bool = False, pub_datasets: bool = False, kernel_sources: list | None = None,
-          pool_dataset: bool = False, cheap_commit: bool = False) -> Path:
+          pool_dataset: bool = False, cheap_commit: bool = False, pool5_dataset: bool = False) -> Path:
     files = code_files()
     payload = {rel: base64.b64encode(p.read_bytes()).decode() for rel, p in files.items()}
     sha = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
@@ -102,7 +103,7 @@ def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: lis
             "competition_sources": ["name-that-llm"],
             "dataset_sources": [f"{USER}/nllm-tokenizers", f"{USER}/nllm-folds"] + ([f"{USER}/nllm-lmfeats"] if gpu else [])
                                + ([EXT_DATASET] if ext_dataset else []) + (PUB_DATASETS if pub_datasets else [])
-                               + ([POOL_DATASET] if pool_dataset else []),
+                               + ([POOL_DATASET] if pool_dataset else []) + ([POOL5_DATASET] if pool5_dataset else []),
             "model_sources": GPU_MODELS if gpu else [], "kernel_sources": list(kernel_sources or [])}
     if gpu:
         meta["machine_shape"] = "NvidiaTeslaT4"
@@ -124,6 +125,7 @@ if __name__ == "__main__":
                     help="comma-separated private kernel outputs to attach (e.g. hasancmert/nllm-gpu-embed-ext: LM "
                          "features of the public passages, linked by replay.setup_lm)")
     ap.add_argument("--pool-dataset", action="store_true", help="attach the public passage pool (recipe v7p and later)")
+    ap.add_argument("--pool5-dataset", action="store_true", help="attach the 120k public pool (recipe v7q and later)")
     ap.add_argument("--pub-datasets", action="store_true",
                     help="attach the public generated-passage datasets (recipes with *_pub steps; never re-uploaded)")
     ap.add_argument("--cheap-commit", action="store_true",
@@ -135,6 +137,7 @@ if __name__ == "__main__":
     if a.cheap_commit and a.pipeline != "replay.py":
         ap.error("--cheap-commit needs --pipeline replay.py (the --check-inputs mode)")
     d = build(a.gpu, a.slug, a.pipeline, a.extra.split(), a.ext_dataset, a.pub_datasets,
-              [k for k in a.kernel_sources.split(",") if k], pool_dataset=a.pool_dataset, cheap_commit=a.cheap_commit)
+              [k for k in a.kernel_sources.split(",") if k], pool_dataset=a.pool_dataset, cheap_commit=a.cheap_commit,
+              pool5_dataset=a.pool5_dataset)
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)

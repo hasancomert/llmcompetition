@@ -22,6 +22,7 @@ Recipes (CV = nested, EXPERIMENTS.md):
         statistics). Combiner CV 0.4719 -> 0.4871 (+0.015 [+0.003, +0.027]); twins as in v6
   v7p   v7g + the 4-view n-gram SVC with the public passage pool in the super combiner (CV 0.5030), WITHOUT the
         Hungarian step (public LB A/Bs: -0.009 to -0.017 in 5 tests)
+  v7q   v7p with the 4-view n-gram SVC trained with the 120k pool (ext_pool5.py) instead of the 38k one (CV 0.5405)
   v7g   v7 + shared-prompt Gaussian group evidence of the same two views on the same test clusters (gauss_twins.py,
         weight 0.25, T 3) + one-to-one model assignment inside test clusters of 3..18 texts ("hungarian": 3, on the
         final log-posteriors). Simulated on held-out prompts (EXPERIMENTS gauss_sim_*): over the twins alone +0.009
@@ -138,6 +139,16 @@ STEPS["famc_super_v7p"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "ng_char-word13-shapec-fw_svc_C0.5_w1_0.7_0.5_0.5_ext-pool-w1-bal",
     "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
     "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts_ng4pool"])
+# the same SVC with the 120k pool (ext_pool5; EXPERIMENTS 625: 0.4101 -> 0.4649): ~14 GB and 3.4 h on a Kaggle CPU
+STEPS["ng4_pool5"] = ({}, "train_ngram.py", ["--feats", "char+word13+shapec+fw", "--stream-weights", "1,0.7,0.5,0.5",
+                                             "--model", "svc", "--C", "0.5", "--save", "--n-jobs", "1", "--ext", "pool5",
+                                             "--ext-balance", "--ext-weight", "1.0", "--ext-min-labels", "1"])
+STEPS["famc_super_v7q"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+    "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
+    "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
+    "ng_char-word13-shapec-fw_svc_C0.5_w1_0.7_0.5_0.5_ext-pool5-w1-ml1-bal",
+    "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
+    "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts_ng4pool5"])
 STEPS["gauss_l12"] = ({}, "gauss_twins.py", ["--views", "qwen3_8b_base_l12;qwen3_4b_base_l12", "--T", "3",
                                               "--thr", "0.85", "--tag", "gauss_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
@@ -207,6 +218,21 @@ RECIPES = {
             # no Hungarian: public LB A/Bs lost 0.009-0.017 with it every time (5 tests, 'Full Ensemble + What
             # Failed'); the 0.66 public notebooks leave it out; our 16 Oct soft matching lost 0.006 on the LB
             "cv": 0.5030},
+    "v7q": {"needs_lm": True, "lm_extra": LM_L12, "needs_pool5": True,
+            # v7p with the 4-view n-gram SVC trained with the 120k pool instead of the 38k one (combiner CV 0.5030 ->
+            # 0.5405, EXPERIMENTS 624). The SVC needs ~14 GB and ~3.4 h (one fold at a time; Kaggle CPU kernel
+            # nllm-cpu-ng4pool5): it runs alone after stage 2 (next to the GPU extraction or the other stages the
+            # memory could run out), ~4.8 h in all. No local e2e (15 GB is too little); the steps it shares with v7p
+            # passed v7p's local e2e, the SVC step passed on the Kaggle CPU kernel
+            "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"]],
+                       [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                          "spec_super_ng@1", "twins_l12@1"]],
+                       [["ng4_pool5@4"]],
+                       [["famc_super_v7q"]],
+                       [["gauss_l12"]]],
+            "weights": {"famcsup6_l12_pub03_ts_ng4pool5": 1.0},
+            "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
+            "cv": 0.5405},
 }
 
 
@@ -318,7 +344,17 @@ def find_pool_dir(spec: str) -> str:
     return os.path.dirname(hits[0]) if hits else ""
 
 
+def find_pool5_dir(spec: str) -> str:
+    """Directory of the attached 120k pool (ext_pool5.py), '' locally (data/external/pools/dhruv)."""
+    if spec != "auto":
+        return spec
+    hits = sorted(p for p in glob.glob("/kaggle/input/**/nlm_pool_v5.parquet", recursive=True)
+                  if "nlm-matched-clean" in p)
+    return os.path.dirname(hits[0]) if hits else ""
+
+
 POOL_DIR = ""                                        # set in main(); run_step passes it to --ext pool steps
+POOL5_DIR = ""                                       # same for --ext pool5 steps
 
 
 def run_step(key, t0, extra=(), pub_dir="", threads=None):
@@ -328,6 +364,8 @@ def run_step(key, t0, extra=(), pub_dir="", threads=None):
         args += ["--ext-dir", pub_dir]
     if POOL_DIR and "pool" in args and "--ext" in args:
         args += ["--ext-dir", POOL_DIR]
+    if POOL5_DIR and "pool5" in args and "--ext" in args:
+        args += ["--ext-dir", POOL5_DIR]
     env = dict(os.environ, OMP_NUM_THREADS=os.environ.get("OMP_NUM_THREADS", "4"), NLLM_KGRAM_CACHE="0", **env_over)
     if threads:                                     # steps running side by side (recipe stages): fixed thread budgets
         env.update(OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads), MKL_NUM_THREADS=str(threads))
@@ -398,6 +436,10 @@ def check_inputs(a, rec, tr, te, pub_dir, t0):
         assert POOL_DIR or not kaggle, "public passage pool not attached (build with --pool-dataset)"
         from ext_pool import load                       # prints a warning if the attached pool is another version
         log(f"pool: {len(load(root=POOL_DIR or None))} training rows", t0)
+    if rec.get("needs_pool5"):
+        assert POOL5_DIR or not kaggle, "120k pool not attached (build with --pool5-dataset)"
+        from ext_pool5 import load as load5             # prints a warning if the attached pool is another version
+        log(f"pool v5: {len(load5(root=POOL5_DIR or None))} training rows", t0)
     scripts = {STEPS[k][1] for k in keys}
     if rec["needs_lm"]:
         scripts.add("gpu_embed.py")
@@ -458,6 +500,8 @@ def main():
                                                        "when they are attached, else the local data/external/pub)")
     ap.add_argument("--pool-dir", default="auto", help="directory of the attached public passage pool (auto: found under "
                                                         "/kaggle/input, else the local data/external/pools/prvsiyan)")
+    ap.add_argument("--pool5-dir", default="auto", help="directory of the attached 120k pool (auto: found under "
+                                                         "/kaggle/input, else the local data/external/pools/dhruv)")
     ap.add_argument("--check-inputs", nargs="?", const="kaggle", default="", choices=["kaggle", "local"],
                     help="commit run of a --cheap-commit notebook: check the inputs, GPU and step imports, write a "
                          "placeholder (3-row public test only); 'local': without the LM model and GPU checks")
@@ -473,10 +517,12 @@ def main():
         log(f"EXTERNAL training rows ON: {' '.join(ext_args)}", t0)
     tr, te = setup_project(a, t0)
     pub_dir = find_pub_dir(a.pub_dir)
-    global POOL_DIR
-    POOL_DIR = find_pool_dir(a.pool_dir)
+    global POOL_DIR, POOL5_DIR
+    POOL_DIR, POOL5_DIR = find_pool_dir(a.pool_dir), find_pool5_dir(a.pool5_dir)
     if rec.get("needs_pool"):
         log(f"public passage pool read from {POOL_DIR or 'data/external/pools/prvsiyan (local)'}", t0)
+    if rec.get("needs_pool5"):
+        log(f"120k public passage pool read from {POOL5_DIR or 'data/external/pools/dhruv (local)'}", t0)
     if a.check_inputs:
         write_out(a, te, check_inputs(a, rec, tr, te, pub_dir, t0), t0)
         return
