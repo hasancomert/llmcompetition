@@ -23,6 +23,7 @@ Recipes (CV = nested, EXPERIMENTS.md):
   v7p   v7g + the 4-view n-gram SVC with the public passage pool in the super combiner (CV 0.5030), WITHOUT the
         Hungarian step (public LB A/Bs: -0.009 to -0.017 in 5 tests)
   v7q   v7p with the 4-view n-gram SVC trained with the 120k pool (ext_pool5.py) instead of the 38k one (CV 0.5405)
+  v8    v7q + the two-stage 4B LoRA24 member (stage 1 on the 120k pool, kernel nllm-lora2s5 attached; CV 0.5875)
   v7g   v7 + shared-prompt Gaussian group evidence of the same two views on the same test clusters (gauss_twins.py,
         weight 0.25, T 3) + one-to-one model assignment inside test clusters of 3..18 texts ("hungarian": 3, on the
         final log-posteriors). Simulated on held-out prompts (EXPERIMENTS gauss_sim_*): over the twins alone +0.009
@@ -149,6 +150,19 @@ STEPS["famc_super_v7q"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "ng_char-word13-shapec-fw_svc_C0.5_w1_0.7_0.5_0.5_ext-pool5-w1-ml1-bal",
     "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
     "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts_ng4pool5"])
+# two-stage LoRA24 members (gpu_lora24.py; adapters = the attached output of the training kernel): test features on
+# the GPU (lora24_infer.py, anchor parity checked), then the plain-readout member (OOF from the jobs' held-out features)
+STEPS["lora4_infer"] = ({}, "lora24_infer.py", ["--model-dir", "{LM:4b-base}", "--jobs-dir", "{JOBS:nllm-lora2s5}",
+                                                "--texts", "{ROOT}/data/test.csv", "--train", "{ROOT}/data/train.csv",
+                                                "--out", "{OUT}/lora24_2s5_4b"])
+STEPS["lora4_member"] = ({}, "lora24_member.py", ["--jobs-dir", "{JOBS:nllm-lora2s5}", "--features-dir",
+                                                  "{OUT}/lora24_2s5_4b", "--member", "lora24_2s5_4b"])
+STEPS["famc_super_v8"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+    "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
+    "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
+    "ng_char-word13-shapec-fw_svc_C0.5_w1_0.7_0.5_0.5_ext-pool5-w1-ml1-bal", "lora24_2s5_4b",
+    "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
+    "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts_ng4pool5_lora4"])
 STEPS["gauss_l12"] = ({}, "gauss_twins.py", ["--views", "qwen3_8b_base_l12;qwen3_4b_base_l12", "--T", "3",
                                               "--thr", "0.85", "--tag", "gauss_l12"])
 STEPS["famc_super_l12"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
@@ -233,6 +247,19 @@ RECIPES = {
             "weights": {"famcsup6_l12_pub03_ts_ng4pool5": 1.0},
             "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
             "cv": 0.5405},
+    "v8": {"needs_lm": True, "lm_extra": LM_L12, "needs_pool5": True,
+           # v7q + the two-stage 4B LoRA24 member (stage 1 on the 120k pool; nllm-lora2s5, OOF 0.5568) in the super
+           # combiner (CV 0.5405 -> 0.5875, EXPERIMENTS); its test features are computed on the GPU in stage 1
+           "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"],
+                       ["lora4_infer@2", "lora4_member@1"]],
+                      [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                         "spec_super_ng@1", "twins_l12@1"]],
+                      [["ng4_pool5@4"]],
+                      [["famc_super_v8"]],
+                      [["gauss_l12"]]],
+           "weights": {"famcsup6_l12_pub03_ts_ng4pool5_lora4": 1.0},
+           "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
+           "cv": 0.5875},
 }
 
 
@@ -357,9 +384,30 @@ POOL_DIR = ""                                        # set in main(); run_step p
 POOL5_DIR = ""                                       # same for --ext pool5 steps
 
 
+def jobs_dir(slug: str) -> str:
+    """lora24/ of an attached LoRA training kernel's output (Kaggle: kernel sources under /kaggle/input; locally the
+    weight-free copy fetched by build_gpu_lora24.py --fetch, enough for lora24_member.py but not for inference)."""
+    hits = sorted(os.path.dirname(os.path.dirname(p)) for p in
+                  glob.glob("/kaggle/input/**/lora24/f0/COMPLETE.json", recursive=True) if f"/{slug}/" in p)
+    if hits:
+        return hits[0]
+    local = Path(os.environ.get("NLLM_KAGGLE_BUILD", ROOT / "outputs" / "kaggle_build")) / slug / "output" / "lora24"
+    assert local.exists(), f"LoRA jobs of {slug} not attached (build with --kernel-sources hasancmert/{slug})"
+    return str(local)
+
+
+def resolve(arg: str) -> str:
+    """Run-time paths in step arguments: {LM:<hint>} attached model, {JOBS:<slug>} LoRA jobs, {ROOT} / {OUT}."""
+    if arg.startswith("{LM:"):
+        return lm_dir(arg[4:-1])
+    if arg.startswith("{JOBS:"):
+        return jobs_dir(arg[6:-1])
+    return arg.replace("{ROOT}", str(ROOT)).replace("{OUT}", str(ROOT / "outputs"))
+
+
 def run_step(key, t0, extra=(), pub_dir="", threads=None):
     env_over, script, args = STEPS[key]
-    args = list(args) + list(extra)
+    args = [resolve(x) for x in args] + list(extra)
     if pub_dir and "pub" in args and "--ext" in args:
         args += ["--ext-dir", pub_dir]
     if POOL_DIR and "pool" in args and "--ext" in args:
@@ -441,6 +489,10 @@ def check_inputs(a, rec, tr, te, pub_dir, t0):
         from ext_pool5 import load as load5             # prints a warning if the attached pool is another version
         log(f"pool v5: {len(load5(root=POOL5_DIR or None))} training rows", t0)
     scripts = {STEPS[k][1] for k in keys}
+    for slug in sorted({x[6:-1] for k in keys for x in STEPS[k][2] if x.startswith("{JOBS:")}):
+        d = jobs_dir(slug)                              # attached LoRA training output (adapters needed on Kaggle)
+        assert not kaggle or all(os.path.isdir(f"{d}/f{k}/adapter") for k in range(5)), f"{slug}: adapters missing"
+        log(f"LoRA jobs {slug}: {d}", t0)
     if rec["needs_lm"]:
         scripts.add("gpu_embed.py")
         from submission_pipeline_gpu import find_train_lm
@@ -451,7 +503,8 @@ def check_inputs(a, rec, tr, te, pub_dir, t0):
         assert torch.cuda.is_available() or not kaggle, "no GPU in the save run: the rerun needs one"
         log(f"GPUs: {[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}", t0)
     import importlib                                    # local tests passed with other versions than Kaggle's
-    pkgs = ["numpy", "pandas", "scipy", "sklearn"] + (["torch", "transformers"] if rec["needs_lm"] else [])
+    pkgs = ["numpy", "pandas", "scipy", "sklearn"] + (["torch", "transformers"] if rec["needs_lm"] else []) + \
+        (["peft"] if "lora24_infer.py" in scripts else [])
     log("versions: " + ", ".join(f"{m} {importlib.import_module(m).__version__}" for m in pkgs), t0)
     mods = sorted(s[:-3] for s in scripts)
     r = subprocess.run([sys.executable, "-c", "import " + ", ".join(mods)], cwd=str(HERE), stdout=subprocess.PIPE,

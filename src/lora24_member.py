@@ -51,18 +51,32 @@ def load_job(jobs_dir, job):
 
 
 def build_member(a, tr, te, y, folds, t0):
+    """--oof-only (CV before any test inference): test rows are uniform placeholders; the tag must end in _oofonly
+    so that such a member can never be mistaken for a submission member."""
+    assert not a.oof_only or a.member.endswith("_oofonly"), "--oof-only members must be tagged *_oofonly"
     oof = np.zeros((len(tr), K))
-    test = np.zeros((len(te), K))
+    test = np.full((len(te), K), 1.0 / K) if a.oof_only else np.zeros((len(te), K))
     for k, job in enumerate(FOLD_JOBS):
         ro, d = load_job(a.jobs_dir, job)
         idx = np.load(d / "valid_idx.npy")
         assert (np.sort(idx) == np.flatnonzero(folds == k)).all(), f"{job}: held-out rows are not fold {k}"
         oof[idx] = readout(np.load(d / "valid_features.npy"), ro, "plain")
+        if a.oof_only:
+            continue
         meta = json.loads((Path(a.features_dir) / f"test_meta_{job}.json").read_text())
         assert meta["ids"] == te["id"].tolist(), f"{job}: test features not in test.csv order"
         test += readout(np.load(Path(a.features_dir) / f"test_features_{job}.npy"), ro, "plain") / len(FOLD_JOBS)
-    run_member(a.member, "LoRA24 (Qwen3 base truncated to 24 layers, LoRA r16 on 7 projections, 8 pooled layers + "
-               "LayerNorm, plain + prompt-centered heads on same-prompt triples, 3 epochs; gpu_lora24.py): plain readout",
+    lg = json.loads((Path(a.jobs_dir) / "f0" / "log.json").read_text())
+    pre = Path(a.jobs_dir) / "pre" / "log.json"
+    stage1 = ""
+    if pre.exists():
+        lp = json.loads(pre.read_text())
+        stage1 = (f"two-stage: stage 1 on {lp['fit_rows']} public pool rows, {lp['updates_done']}/{lp['updates']} "
+                  f"updates, class-weighted; ")
+    run_member(a.member, f"LoRA24 (Qwen3 base truncated to {lg['n_layers']} layers, LoRA r16 on 7 projections, "
+               f"pooled layers {lg['pool_layers']} + LayerNorm, plain + prompt-centered heads on same-prompt triples; "
+               f"{stage1}folds {lg['epochs']} epochs at lr {lg['lr']:g} / {lg['head_lr']:g}; gpu_lora24.py): plain "
+               f"readout{' (OOF ONLY: test rows uniform placeholders)' if a.oof_only else ''}",
                oof, test, y, folds, t0, note=a.note)
 
 
@@ -92,6 +106,7 @@ def main():
     ap.add_argument("--jobs-dir", required=True, help="directory with f0..f4/ of the training kernel")
     ap.add_argument("--features-dir", default=str(OUT / "lora24"), help="test_features_<job>.npy (lora24_infer.py)")
     ap.add_argument("--member", default="", help="save the plain-readout member under this tag")
+    ap.add_argument("--oof-only", action="store_true", help="CV only: no test features yet (tag must end in _oofonly)")
     ap.add_argument("--note", default="")
     ap.add_argument("--twins", default="", help="write test twin evidence outputs/twins/<tag>.npz")
     ap.add_argument("--thr", type=float, default=0.85)
