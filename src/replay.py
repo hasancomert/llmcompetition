@@ -408,6 +408,9 @@ def check_inputs(a, rec, tr, te, pub_dir, t0):
         import torch
         assert torch.cuda.is_available() or not kaggle, "no GPU in the save run: the rerun needs one"
         log(f"GPUs: {[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}", t0)
+    import importlib                                    # local tests passed with other versions than Kaggle's
+    pkgs = ["numpy", "pandas", "scipy", "sklearn"] + (["torch", "transformers"] if rec["needs_lm"] else [])
+    log("versions: " + ", ".join(f"{m} {importlib.import_module(m).__version__}" for m in pkgs), t0)
     mods = sorted(s[:-3] for s in scripts)
     r = subprocess.run([sys.executable, "-c", "import " + ", ".join(mods)], cwd=str(HERE), stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT, text=True)

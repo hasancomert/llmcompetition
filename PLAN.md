@@ -459,6 +459,39 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   - Eski plandaki "yalnız resmi veriyle 8B LoRA24" (~4.5 sa) bırakılıyor. Public CV'ye göre 1. aşamasız LoRA ~0.48,
     iki aşamalı 0.569.
 
+### Yeni public notebook'lar (29 Ekim; 0.636–0.666; kullanıcı isteği, GPU'suz)
+
+- Okunanlar: alexchilton 0.660 / 0.651, lightningv08 0.661 / 0.642, omerfarukmerey 0.663, ozertuu 0.666, kirilltym 0.642,
+  fleongg 0.636, mathleteutd 0.649, mercurydust ("Who am I? V31"), romantamrazov, huangkx666, xianyu3, avazaku,
+  dhruvtibarewal. Notebook'lar okundu, çalıştırılmadı; aşağıdaki LB sayıları onların beyanı.
+- Ne oldukları: başkalarının eğittiği public checkpoint'lerin dev yığınları (Qwen3-14B / 8B / Llama fold
+  adaptörleri, iki aşamalı 14B ve Qwen2.5-14B, %10–20 ATLAS, UltraBERT). OOF'ları bizim fold'larımızda yok.
+  - 120 bin satırlık public derlem 1. aşamada / Qwen2.5-14B yeniden eğitiminde kullanılmış (beyan: +0.006).
+  - alexchilton'ın kendi 5 omurgalı iki aşamalı harmanı tabloda yalnız 0.559 (ikizlerle 0.588); iç içe CV'si 0.6865
+    tam 18'li gruplarla şişmiş.
+  - Güçlü yığınlara üye eklemek: ±0.004.
+- Gürültü: aynı kod farklı koşularda 0.651 / 0.643 / 0.651 aldı. Public LB'de 0.01'in altındaki farklar anlamsız.
+- Hungarian: public LB A/B'lerinde 5 denemenin hepsinde kaybettirmiş (−0.009 … −0.017; "Full Ensemble + What
+  Failed"). 0.66 notebook'ları kullanmıyor; bizim 16 Ekim yumuşak eşleştirmemiz de LB'de −0.006 almıştı.
+  **v7p'den çıkarıldı** (v7p = v7 + Gaussian grup kanıtı + havuzlu n-gram SVC). Benzetimdeki kazancı gizli testin
+  yapısına taşınmıyor.
+- V31'in iki son adımı (`post_steps.py`, yeniden yazıldı), bizde ölçüldü (EXPERIMENTS 618–623):
+  - Yumuşak Sinkhorn (s 0.45, ρ 0.35) ve Bayesçi tipografi (37 işaret, κ 24).
+  - Tam OOF'ta her ayar düz birleştiricinin ±0.002'si içinde (0.5012–0.5038).
+  - v7p ikizleri + Gaussian üstüne, benzetimde: yapıya göre −0.005 … +0.002; hiçbir ayar her yapıda olumlu değil.
+    **Alınmadı.**
+- Commit'te ucuz yol (alexchilton, mathleteutd, omerfarukmerey kullanıyor) **alındı**:
+  - `build_submission.py --cheap-commit`: kayıt (save) koşusu `replay.py --check-inputs` ile yalnız ekli girdileri,
+    GPU'yu, paket sürümlerini ve her adım betiğinin import'unu denetler, yer tutucu yazar. Tam replay yalnız gizli test
+    koşusunda çalışır (`KAGGLE_IS_COMPETITION_RERUN` var ya da test 40+ satır).
+  - Kaggle personeli: puanlama koşusu GPU kotasından düşmüyor, kayıt koşusu düşüyor (Q&A 453105). Gönderim başına
+    ~1 GPU-saat kazanılıyor.
+  - Bedeli: Kaggle'da notebook içi OOF kontrolü görünmüyor. Bu yüzden her push'tan önce tarifin yerel uçtan uca replay'i
+    koşulur. Kaggle 15 Ekim'de sklearn 1.6.1 / numpy 2.1.3 kullanıyordu, yerelde 1.9.1 / 2.5.4 var; kod ikisinde de
+    geçiyor.
+  - Yerel testler: denetim modu 3 satırlık testte; notebook hücresi sahte Kaggle girdileriyle iki dalda (commit:
+    girdiler bulundu, GPU yok diye durdu; rerun: tam replay başladı).
+
 ### Featherless ek veri iş kolu (16 Ekim'de açıldı; dal `featherless-extra-data`)
 
 **Kurallar (kullanıcıdan):**
@@ -616,13 +649,15 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   - Zamanlanmış görev (`trig_01QPMvJH5scmKNDHHNvE1KQz`, 24 Ekim 00:30 UTC): kota sıfırlanınca bu planı başlatır (önce kernel listesiyle S6E10 slotları kontrol edilir).
     21 Ekim: istemi yeni plana göre güncellendi; kullanıcı planı aynı gün onayladı (iki aşamalı 4B LoRA, ext-embed, v8).
     23 Ekim 22:13 UTC: kullanıcı 2 gün ara istedi ("Önümüzdeki 2 gün bir şey yapma"). Görev 25 Ekim 22:30 UTC'ye alındı; o zaman da işe kendiliğinden başlamaz, önce kullanıcıya sorar (GPU planına devam ve GPU kiralama kararı).
+    28 Ekim: kullanıcı kararlarından sonra görev 31 Ekim 00:30 UTC'ye alındı. 29 Ekim: istemine `--cheap-commit` ve Hungarian'sız v7p eklendi.
 - Kullanıcı kararları (28 Ekim): bu hafta GPU kullanılmıyor, 31 Ekim'deki kota sıfırlanması bekleniyor. GPU kiralama yok;
   bütün eğitim Kaggle'da. S6E10 31 Ekim'de bitiyor; ondan sonra haftalık 30 saatin tamamı NLLM'e kalıyor.
 - GPU planı, 31 Ekim haftası (~30 sa, yalnız Kaggle T4; sıra):
   1. Kernel listesiyle S6E10'un son koşularına bakılır; slotlarına dokunulmaz.
-  2. v7p gönderimi (~1–1.5 sa): `python kaggle/build_submission.py --gpu --pipeline replay.py --extra "--recipe v7p"
-     --pub-datasets --pool-dataset --push`, COMPLETE olunca yarışmaya gönderilir. LB, Gaussian + Hungarian ve havuz
-     SVC'sinin gizli testteki etkisini de gösterir.
+  2. v7p gönderimi (Hungarian'sız; kayıt koşusu birkaç dakika, puanlama koşusu kotadan düşmüyor):
+     `python kaggle/build_submission.py --gpu --pipeline replay.py --extra "--recipe v7p" --pub-datasets --pool-dataset
+     --cheap-commit --push`. COMPLETE olunca logdaki denetimler okunur, sonra yarışmaya gönderilir. LB, Gaussian'ın ve
+     havuz SVC'sinin gizli testteki etkisini gösterir.
   3. İki aşamalı 4B LoRA (`--slug nllm-lora2s --two-stage --hint 4b-base --budget-h 3.75`).
   4. İki aşamalı 8B LoRA (`--slug nllm-lora2s8 --two-stage --hint 8b-base --micro 1 --pre-max-h 2.5 --fold-max-h 0.6
      --budget-h 6`; T4'te 8B için üçlü başına bir ileri geçiş).
