@@ -6,6 +6,11 @@ inputs under /kaggle/input, and runs src/submission_pipeline.py, which writes /k
 
 Usage (from the repo root):  python kaggle/build_submission.py [--push]
 Output: outputs/kaggle_build/nllm-submit/{submission.ipynb, kernel-metadata.json}
+
+--cheap-commit (replay.py): the save run only checks the inputs and writes a placeholder (replay.py --check-inputs);
+the full replay runs in the competition rerun (KAGGLE_IS_COMPETITION_RERUN set, or a test of 40+ rows). The save
+run's GPU time counts against the weekly quota, the scoring rerun's does not (Kaggle staff, questions-and-answers
+453105), so this saves the ~1 GPU-h of a replay per submission. Run the recipe's local e2e replay before pushing.
 """
 from __future__ import annotations
 
@@ -36,8 +41,14 @@ comp_dir = os.path.dirname(find("test.csv", "name-that-llm"))
 tok_dir = os.path.dirname(find("gemma__tokenizer.json", "nllm-tokenizers"))
 folds_csv = find("folds.csv", "nllm-folds")
 print("inputs:", comp_dir, tok_dir, folds_csv)
+extra = __EXTRA_ARGS__
+if __CHEAP__:   # commit-only path: the full replay runs only in the competition rerun (both signals must say commit)
+    import pandas as pd
+    rerun = os.getenv("KAGGLE_IS_COMPETITION_RERUN") is not None or len(pd.read_csv(f"{comp_dir}/test.csv")) >= 40
+    print("competition rerun: full replay" if rerun else "commit run: input checks and a placeholder submission")
+    extra = extra if rerun else extra + ["--check-inputs"]
 sys.argv = [__PIPELINE__, "--data-dir", comp_dir, "--folds", folds_csv, "--tokenizers-flat", tok_dir,
-            "--out", "/kaggle/working/submission.parquet"] + __EXTRA_ARGS__
+            "--out", "/kaggle/working/submission.parquet"] + extra
 runpy.run_path(f"{proj}/src/{__PIPELINE__}", run_name="__main__")
 '''
 
@@ -62,7 +73,7 @@ POOL_DATASET = "prvsiyan/ntl-public-in-style-pool-v1"   # public passage pool (C
 
 def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: list | None = None,
           ext_dataset: bool = False, pub_datasets: bool = False, kernel_sources: list | None = None,
-          pool_dataset: bool = False) -> Path:
+          pool_dataset: bool = False, cheap_commit: bool = False) -> Path:
     files = code_files()
     payload = {rel: base64.b64encode(p.read_bytes()).decode() for rel, p in files.items()}
     sha = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
@@ -75,7 +86,8 @@ def build(gpu: bool = False, slug: str = "", pipeline: str = "", extra_args: lis
     # GPU: train LM features come from the private dataset nllm-lmfeats when it matches (saves ~25 GPU-min per run)
     extra = (["--work", "/tmp/nllm_work", "--train-lm", "auto"] if gpu else []) + list(extra_args or [])
     src = (CELL.replace("__FILES__", repr(payload)).replace("__CODE_SHA__", repr(sha)).replace("__GIT__", repr(git))
-           .replace("__PIPELINE__", repr(pipeline)).replace("__EXTRA_ARGS__", repr(extra)))
+           .replace("__PIPELINE__", repr(pipeline)).replace("__EXTRA_ARGS__", repr(extra))
+           .replace("__CHEAP__", repr(cheap_commit)))
     nb = {"cells": [{"cell_type": "code", "id": "nllm-submit-main", "execution_count": None, "metadata": {}, "outputs": [],
                      "source": src.strip().splitlines(keepends=True)}],
           "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
@@ -114,10 +126,15 @@ if __name__ == "__main__":
     ap.add_argument("--pool-dataset", action="store_true", help="attach the public passage pool (recipe v7p and later)")
     ap.add_argument("--pub-datasets", action="store_true",
                     help="attach the public generated-passage datasets (recipes with *_pub steps; never re-uploaded)")
+    ap.add_argument("--cheap-commit", action="store_true",
+                    help="replay.py only: the save run checks inputs and writes a placeholder (replay --check-inputs); "
+                         "the full replay runs in the competition rerun, whose GPU time is not charged to the quota")
     a = ap.parse_args()
     if "--ext" in a.extra.split() and not a.ext_dataset:
         ap.error("--extra uses --ext: add --ext-dataset so the corpus is attached as a notebook input")
+    if a.cheap_commit and a.pipeline != "replay.py":
+        ap.error("--cheap-commit needs --pipeline replay.py (the --check-inputs mode)")
     d = build(a.gpu, a.slug, a.pipeline, a.extra.split(), a.ext_dataset, a.pub_datasets,
-              [k for k in a.kernel_sources.split(",") if k], pool_dataset=a.pool_dataset)
+              [k for k in a.kernel_sources.split(",") if k], pool_dataset=a.pool_dataset, cheap_commit=a.cheap_commit)
     if a.push:
         subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=True)

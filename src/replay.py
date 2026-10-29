@@ -20,6 +20,8 @@ Recipes (CV = nested, EXPERIMENTS.md):
         5 CC BY 4.0 Kaggle datasets attached as inputs; weight 0.3, class-balanced, training folds only) and (b) test-set
         standardization of the 12-layer LM members and specialists (held-out fold / test rows scaled by their own
         statistics). Combiner CV 0.4719 -> 0.4871 (+0.015 [+0.003, +0.027]); twins as in v6
+  v7p   v7g + the 4-view n-gram SVC with the public passage pool in the super combiner (CV 0.5030), WITHOUT the
+        Hungarian step (public LB A/Bs: -0.009 to -0.017 in 5 tests)
   v7g   v7 + shared-prompt Gaussian group evidence of the same two views on the same test clusters (gauss_twins.py,
         weight 0.25, T 3) + one-to-one model assignment inside test clusters of 3..18 texts ("hungarian": 3, on the
         final log-posteriors). Simulated on held-out prompts (EXPERIMENTS gauss_sim_*): over the twins alone +0.009
@@ -29,6 +31,11 @@ External training rows (extdata.py; OFF by default, cpu2 only): --ext ntl_short 
 with the external corpus rows added to their training folds (member tags get the extdata suffix; blend weights stay
 those of the recipe). The corpus is read from the attached Kaggle dataset (--ext-dir auto: the directory under
 /kaggle/input that holds external_short_wide.parquet); it is never copied into the notebook or re-uploaded.
+
+Commit-only path (--check-inputs; build_submission.py --cheap-commit adds it in the notebook's save run only): the save
+run's GPU time counts against the weekly quota, the competition's hidden-test rerun does not. The save run then only
+checks what the rerun needs (attached inputs, GPU, imports of every step script) and writes a placeholder; the full
+replay runs in the rerun. Its in-kernel OOF check is then not visible: run the recipe's local e2e replay first.
 
 Usage (notebook): python replay.py --recipe v4 --data-dir D --folds F --tokenizers-flat T --out submission.parquet
                   [--work /tmp/nllm_work --train-lm auto]       (GPU: LM features of the test are extracted here)
@@ -197,7 +204,8 @@ RECIPES = {
                        [["gauss_l12"]]],
             "weights": {"famcsup6_l12_pub03_ts_ng4pool": 1.0},
             "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
-            "hungarian": 3,
+            # no Hungarian: public LB A/Bs lost 0.009-0.017 with it every time (5 tests, 'Full Ensemble + What
+            # Failed'); the 0.66 public notebooks leave it out; our 16 Oct soft matching lost 0.006 on the LB
             "cv": 0.5030},
 }
 
@@ -239,6 +247,14 @@ def setup_project(a, t0):
     return tr, te
 
 
+def lm_dir(hint: str) -> str:
+    """Directory of the attached Qwen3 model (Kaggle Models) whose path holds /<hint>/."""
+    cfg = [q for q in glob.glob("/kaggle/input/**/config.json", recursive=True) if f"/{hint}/" in q and "qwen" in q]
+    if not cfg:
+        raise FileNotFoundError(f"model {hint} not attached")
+    return os.path.dirname(cfg[0])
+
+
 def setup_lm(a, tr, te, t0, extra=()):
     """outputs/emb/{emb,lp,meta}_<name>_{train,test}: precomputed (local), or test extracted here (GPU) with the
     train split taken from the private dataset nllm-lmfeats when it matches train.csv row order.
@@ -260,16 +276,14 @@ def setup_lm(a, tr, te, t0, extra=()):
     from submission_pipeline_gpu import find_train_lm, load_split
     train_dir = find_train_lm(a.train_lm)
     for name, hint, fracs in models:
-        cfg = [q for q in glob.glob("/kaggle/input/**/config.json", recursive=True) if f"/{hint}/" in q and "qwen" in q]
-        if not cfg:
-            raise FileNotFoundError(f"model {hint} not attached")
+        model_dir = lm_dir(hint)
         pre = load_split(train_dir, name, "train", tr["id"].tolist()) if train_dir else None
         if pre is not None:
             for kind, ext in (("emb", "npy"), ("lp", "npy"), ("meta", "json")):
                 link(train_dir / f"{kind}_{name}_train.{ext}", emb / f"{kind}_{name}_train.{ext}")
         texts = ([] if pre is not None else ["--texts", str(ROOT / "data" / "train.csv")]) + \
             ["--texts", str(ROOT / "data" / "test.csv")]
-        r = subprocess.run([sys.executable, str(HERE / "gpu_embed.py"), "--model-dir", os.path.dirname(cfg[0]),
+        r = subprocess.run([sys.executable, str(HERE / "gpu_embed.py"), "--model-dir", model_dir,
                             "--name", name, *texts, "--out", str(emb)] + (["--layer-fracs", fracs] if fracs else []))
         if r.returncode != 0:
             raise RuntimeError(f"gpu_embed failed for {name} (exit {r.returncode})")
@@ -371,6 +385,58 @@ def recipe_steps(rec):
     return list(rec["steps"])
 
 
+def check_inputs(a, rec, tr, te, pub_dir, t0):
+    """Commit run of a --cheap-commit notebook: checks what the hidden-test rerun needs and returns placeholder labels
+    (the most frequent training label; the save run is never scored). Every failure is raised (no fallback).
+    a.check_inputs 'local' (tests outside Kaggle) skips the LM model and GPU checks and accepts the local data copies."""
+    assert len(te) < 40, "--check-inputs is for the commit run on the public 3-row test only"
+    kaggle = a.check_inputs == "kaggle"
+    keys = recipe_steps(rec)
+    if any("pub" in STEPS[k][2] and "--ext" in STEPS[k][2] for k in keys):
+        assert pub_dir or not kaggle, "public generated passages not attached (build with --pub-datasets)"
+    if rec.get("needs_pool"):
+        assert POOL_DIR or not kaggle, "public passage pool not attached (build with --pool-dataset)"
+        from ext_pool import load                       # prints a warning if the attached pool is another version
+        log(f"pool: {len(load(root=POOL_DIR or None))} training rows", t0)
+    scripts = {STEPS[k][1] for k in keys}
+    if rec["needs_lm"]:
+        scripts.add("gpu_embed.py")
+        from submission_pipeline_gpu import find_train_lm
+        for hint in sorted({h for _, h in LM_MODELS} | {h for _, h, _ in rec.get("lm_extra", ())}):
+            log(f"LM {hint}: {lm_dir(hint) if kaggle else 'not checked (local)'}", t0)
+        log(f"train LM features: {find_train_lm(a.train_lm) or 'not attached (the rerun extracts them)'}", t0)
+        import torch
+        assert torch.cuda.is_available() or not kaggle, "no GPU in the save run: the rerun needs one"
+        log(f"GPUs: {[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}", t0)
+    mods = sorted(s[:-3] for s in scripts)
+    r = subprocess.run([sys.executable, "-c", "import " + ", ".join(mods)], cwd=str(HERE), stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"step scripts do not import:\n{r.stdout[-3000:]}")
+    log(f"step scripts import: {', '.join(mods)}", t0)
+    log("commit run: inputs checked; placeholder submission (the full replay runs in the competition rerun)", t0)
+    return np.full(len(te), tr["model"].mode()[0], dtype=object)
+
+
+def write_out(a, te, labels, t0):
+    """Write and validate a.out (ids of test.csv in the order of sample_submission.parquet when it matches)."""
+    from common import CLASSES
+    import submission as sub_check  # reuse/airline/submission.py
+    sample = None
+    sp = Path(a.data_dir) / "sample_submission.parquet"
+    if sp.exists():
+        ss = pd.read_parquet(sp)
+        if set(ss["id"].astype(str)) == set(te["id"]):
+            sample = ss.assign(id=ss["id"].astype(str))
+    counts = sub_check.write_submission(a.out, te["id"].values, labels, sample=sample, id_col="id", target_col="model",
+                                        allowed=CLASSES, min_classes=1 if len(te) < 40 else 2)
+    out = pd.read_parquet(a.out)
+    assert list(out.columns) == ["id", "model"] and len(out) == len(te) and out["id"].is_unique
+    assert out["model"].notna().all() and set(out["model"]) <= set(CLASSES) and set(out["id"]) == set(te["id"])
+    log(f"wrote {a.out}: {len(out)} rows, {out['model'].nunique()} labels (recipe {a.recipe})", t0)
+    print(counts.to_string(), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--recipe", required=True, choices=sorted(RECIPES))
@@ -389,6 +455,9 @@ def main():
                                                        "when they are attached, else the local data/external/pub)")
     ap.add_argument("--pool-dir", default="auto", help="directory of the attached public passage pool (auto: found under "
                                                         "/kaggle/input, else the local data/external/pools/prvsiyan)")
+    ap.add_argument("--check-inputs", nargs="?", const="kaggle", default="", choices=["kaggle", "local"],
+                    help="commit run of a --cheap-commit notebook: check the inputs, GPU and step imports, write a "
+                         "placeholder (3-row public test only); 'local': without the LM model and GPU checks")
     a = ap.parse_args()
     t0 = time.time()
     rec = RECIPES[a.recipe]
@@ -405,6 +474,9 @@ def main():
     POOL_DIR = find_pool_dir(a.pool_dir)
     if rec.get("needs_pool"):
         log(f"public passage pool read from {POOL_DIR or 'data/external/pools/prvsiyan (local)'}", t0)
+    if a.check_inputs:
+        write_out(a, te, check_inputs(a, rec, tr, te, pub_dir, t0), t0)
+        return
     try:
         if any("pub" in STEPS[k][2] for k in recipe_steps(rec)):
             log(f"public generated passages read from {pub_dir or 'data/external/pub (local)'}", t0)
@@ -418,8 +490,7 @@ def main():
         for key in rec.get("steps", []):
             run_step(key, t0, ext_args if key in EXT_STEPS else (), pub_dir)
         from common import CLASSES, K, encode_y, load_member, metrics
-        import submission as sub_check  # reuse/airline/submission.py
-        w = {m + sfx: wt for m, wt in rec["weights"].items()}
+        w ={m + sfx: wt for m, wt in rec["weights"].items()}
         oofs = {m: load_member(m)[0] for m in w}
         tests = {m: load_member(m)[1] for m in w}
         assert all(t.shape == (len(te), K) for t in tests.values()), "member test predictions have the wrong shape"
@@ -463,19 +534,7 @@ def main():
         r = subprocess.run([sys.executable, str(HERE / fb[0]), "--data-dir", a.data_dir, "--folds", a.folds,
                             "--tokenizers-flat", a.tokenizers_flat, "--out", a.out, *fb[1:]])
         sys.exit(r.returncode)
-    sample = None
-    sp = Path(a.data_dir) / "sample_submission.parquet"
-    if sp.exists():
-        ss = pd.read_parquet(sp)
-        if set(ss["id"].astype(str)) == set(te["id"]):
-            sample = ss.assign(id=ss["id"].astype(str))
-    counts = sub_check.write_submission(a.out, te["id"].values, labels, sample=sample, id_col="id", target_col="model",
-                                        allowed=CLASSES, min_classes=1 if len(te) < 40 else 2)
-    out = pd.read_parquet(a.out)
-    assert list(out.columns) == ["id", "model"] and len(out) == len(te) and out["id"].is_unique
-    assert out["model"].notna().all() and set(out["model"]) <= set(CLASSES) and set(out["id"]) == set(te["id"])
-    log(f"wrote {a.out}: {len(out)} rows, {out['model'].nunique()} labels (recipe {a.recipe})", t0)
-    print(counts.to_string(), flush=True)
+    write_out(a, te, labels, t0)
 
 
 if __name__ == "__main__":

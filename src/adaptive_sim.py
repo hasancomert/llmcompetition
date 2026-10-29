@@ -26,6 +26,9 @@ holds one prompt only).
 --gauss-views v1;v2 adds the shared-prompt Gaussian group head (gauss_head.py) of each view: fitted per fold on the
 training rows (true prompt ids), it decodes every adapted cluster jointly; its log-posteriors (temperature T) are added
 with weight wg on the adapted rows, alone (columns G<T>x<wg>) and on top of the twins (C<C>_w<w>_G<T>x<wg>).
+--soft-sink s:rho,... and --typo add the post-steps of the public 0.66 notebooks (post_steps.py) to the plain pipeline
+and to every twins + Gaussian variant: damped balancing over the pooled simulated test (suffix _ss<s>r<rho>) and the
+gated Beta-Bernoulli typography evidence (suffix _ty; per fold fitted on the training folds), alone and combined.
 
 Usage: python adaptive_sim.py --views qwen3_8b_base_l12,qwen3_4b_base_l12 --C 0.0003,0.001 --ranges 1-2,1-5,2-4,3-8
 """
@@ -218,6 +221,8 @@ def main():
     ap.add_argument("--gauss-d", type=int, default=256)
     ap.add_argument("--gauss-T", default="1,3", help="temperature grid of the Gaussian head")
     ap.add_argument("--gauss-w", default="0.1,0.25,0.5", help="weight grid of the Gaussian evidence")
+    ap.add_argument("--soft-sink", default="", help="damped balancing settings strength:rho, comma-separated")
+    ap.add_argument("--typo", action="store_true", help="add the gated typography evidence (post_steps.Typography)")
     ap.add_argument("--hungarian", default="", help="one-to-one assignment inside clusters of m..max-size texts after "
                     "the twins; comma-separated m values (empty: none)")
     ap.add_argument("--seed", type=int, default=0)
@@ -280,6 +285,27 @@ def main():
                 gU[v, k] = (h, h.transform(Xtr))
             del Xtr
             print(f"gauss {v}: 5 folds ({time.time() - t0:.0f}s)", flush=True)
+    sinks = [tuple(float(x) for x in t.split(":")) for t in a.soft_sink.split(",") if t]
+    prior = (np.bincount(y, minlength=K) + 1.0) / (len(y) + K)
+    typo_ev = None
+    if a.typo:                                           # out-of-fold typography evidence of every train row
+        from post_steps import Typography
+        typo_ev, typo_words, typo_active = np.zeros((len(y), K)), np.zeros(len(y)), np.zeros(len(y))
+        for k in range(n_f):
+            trn, val = np.flatnonzero(folds != k), np.flatnonzero(folds == k)
+            e, w_, act = Typography().fit([texts[i] for i in trn], y[trn], K).evidence([texts[i] for i in val])
+            typo_ev[val], typo_words[val], typo_active[val] = e, w_, act
+
+    def post_variants(res, name, z, keep, ba):
+        """Soft-Sinkhorn / typography columns of one final score matrix."""
+        from post_steps import soft_sinkhorn, typography_apply
+        outs = [("", z)] + [(f"_ss{s_:g}r{r_:g}", soft_sinkhorn(z, s_, r_, prior)) for s_, r_ in sinks]
+        for sfx, zz in outs:
+            if sfx:
+                res[f"{name}{sfx}"] = ba(zz)
+            if typo_ev is not None:
+                res[f"{name}{sfx}_ty"] = ba(typography_apply(zz, typo_ev[keep], typo_words[keep], typo_active[keep]))
+
     rng = np.random.default_rng(a.seed)
     rows = []
     for rg in a.ranges.split(","):
@@ -299,6 +325,7 @@ def main():
             fk = folds[keep]
             lp = np.log(np.clip(Pp, 1e-9, 1))
             ba = lambda z: metrics.balanced_accuracy(yk, np.eye(K)[z.argmax(1)])
+            post_variants(res, "plain", lp, keep, ba)
             for b in alphas:
                 res[f"plain_b{b:g}"] = ba(balance(lp, b))
             ba_pred = lambda p: metrics.balanced_accuracy(yk, np.eye(K)[p])
@@ -351,9 +378,11 @@ def main():
                     res[f"C{C:g}_w{w:g}"] = ba(z)
                     for m in hms:
                         res[f"C{C:g}_w{w:g}_h{m}"] = ba_pred(hungarian(z, g, m, a.max_size))
+                    post_variants(res, f"C{C:g}_w{w:g}", z, keep, ba)
                     for T, Lg in L_g.items():
                         for wg in gws:
                             res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}"] = ba(z + wg * Lg)
+                            post_variants(res, f"C{C:g}_w{w:g}_G{T:g}x{wg:g}", z + wg * Lg, keep, ba)
                             for m in hms:
                                 res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}_h{m}"] = ba_pred(hungarian(z + wg * Lg, g, m,
                                                                                              a.max_size))
@@ -369,7 +398,7 @@ def main():
             print(" ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in res.items()), flush=True)
     df = pd.DataFrame(rows)
     cols = [c for c in df.columns if c not in ("range", "sim", "n")]
-    var = [c for c in cols if c.startswith(("C", "G", "plain_b", "plain_h"))]   # variants, vs the plain pipeline
+    var = [c for c in cols if c.startswith(("C", "G", "plain_b", "plain_h", "plain_ss", "plain_ty"))]   # vs plain
     summ = df.groupby("range")[cols].mean()
     for c in var:
         d = df[c] - df["plain"]
