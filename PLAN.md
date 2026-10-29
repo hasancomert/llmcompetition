@@ -690,6 +690,15 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Arka plandaki bir betik (`scratchpad/push_v7q_when_free.sh`) 4B LoRA bitince v7q'yu ucuz commit'le push'luyor,
       kayıt koşusunun denetimlerini kontrol edip gönderiyor (log: `scratchpad/push_v7q.log`).
     - Yeniden koşu tahmini ~4,8 sa, sınır 9 sa; SVC ayrı aşamada tek başına koşuyor (~14 GB).
+  - Akşam (22:30 UTC):
+    - v7p public LB **0.516** (v7 0.503).
+    - Konteyner iki kez yeniden başladı, bekleme betiği öldü. v7q elle push'landı (sürüm 7, kayıt denetimleri ok) ve
+      gönderildi (ref 57784052).
+    - 4B LoRA bitti (4,1 sa). Üye OOF 0.5568; v7q birleştiricisine eklenince 0.5405 → **0.5875**.
+    - v8 (= v7q + 4B LoRA) tam kayıt koşusuyla push'landı (sürüm 8, 22:35 UTC, ~5 sa). Amaç LoRA çıkarım yolunu
+      Kaggle'da doğrulamak ve notebook içi OOF'u görmek. Bitince gönderilecek.
+    - 8B LoRA ~01:40 UTC'de bitecek; üyesi CV'de ölçülüp v8'e eklenirse v8b.
+    - Kota 22:37 UTC'de 13,1 / 30 sa.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
