@@ -7,6 +7,8 @@
                     lucasboesen, dophuchung, abdullah1afify; prompt blocks with >= --ext-min-labels labels)
   --ext pool        aggregated public pool (ext_pool.load: Kaggle prvsiyan/ntl-public-in-style-pool-v1, CC BY-SA 4.0,
                     15 public datasets incl. the five pub sources; prompt blocks with >= --ext-min-labels labels)
+  --ext pool5       larger aggregated public pool (ext_pool5.load: Kaggle dhruvtibarewal/nlm-matched-clean,
+                    nlm_pool_v5, 46 sources, per-row upstream licences; prompt blocks >= --ext-min-labels labels)
   --ext ft2         fit test v2 generated texts (ft2_eval.load_generated, dev + eval splits, one --ext-template);
                     each answers a reconstructed TRAIN prompt, so it is left out whenever that prompt_id is validated
 
@@ -25,7 +27,7 @@ import pandas as pd
 
 from common import CLASS_INDEX, ROOT
 
-CHOICES = ("none", "ntl_short", "ft2", "pub", "pool")
+CHOICES = ("none", "ntl_short", "ft2", "pub", "pool", "pool5")
 
 
 def add_args(ap):
@@ -77,6 +79,12 @@ def describe(a) -> str:
                 f"{', class-balanced' if a.ext_balance else ''}"
                 f"{', dropped sources ' + a.ext_drop_sources if a.ext_drop_sources else ''}; training folds only, "
                 f"topic-matched rows left out when their prompt_id is validated)")
+    if a.ext == "pool5":
+        return (f"; + PUBLIC POOL v5 training rows (dhruvtibarewal/nlm-matched-clean nlm_pool_v5, 46 public datasets, "
+                f"per-row upstream licences CC BY / BY-SA / CC0 / MIT; prompt blocks >= {a.ext_min_labels} labels, weight "
+                f"{a.ext_weight:g}{', class-balanced' if a.ext_balance else ''}"
+                f"{', dropped sources ' + a.ext_drop_sources if a.ext_drop_sources else ''}; training folds only, "
+                f"topic-matched rows left out when their prompt_id is validated)")
     if a.ext == "ft2":
         return (f"; + GENERATED training rows (fit test v2 texts, template {a.ext_template}, weight {a.ext_weight:g}"
                 f"{', dropped labels ' + a.ext_drop_labels if getattr(a, 'ext_drop_labels', '') else ''}; training folds "
@@ -113,7 +121,7 @@ def load(a, tr: pd.DataFrame | None = None) -> Ext | None:
         return None
     if a.ext == "ft2":
         return _load_ft2(a)
-    if a.ext in ("pub", "pool"):
+    if a.ext in ("pub", "pool", "pool5"):
         return _load_pub(a, tr)
     import ext_corpus
     import ext_leak
@@ -151,11 +159,12 @@ def _balanced(y: np.ndarray, w: float) -> np.ndarray:
 
 
 def _load_pub(a, tr: pd.DataFrame | None) -> Ext:
-    """--ext pub (ext_pub) or --ext pool (ext_pool): same rules, same leak check, own match caches."""
+    """--ext pub (ext_pub), pool (ext_pool) or pool5 (ext_pool5): same rules, same leak check, own match caches."""
     import ext_leak
     import ext_pool
+    import ext_pool5
     import ext_pub
-    src = ext_pool if a.ext == "pool" else ext_pub
+    src = {"pool": ext_pool, "pool5": ext_pool5}.get(a.ext, ext_pub)
     df = src.load(min_labels=a.ext_min_labels, root=a.ext_dir or None)
     if a.ext_drop_sources:
         df = df[~df["source"].isin(a.ext_drop_sources.split(";"))]

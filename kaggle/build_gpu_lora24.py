@@ -16,6 +16,7 @@ dropped inside the kernel), then f0..f4 from its adapter (2 epochs, lr 5e-5 / 5e
 Usage (repo root):
   python kaggle/build_gpu_lora24.py --slug nllm-lora24 [--push]                       GPU run (8B, all 6 jobs)
   python kaggle/build_gpu_lora24.py --slug nllm-lora2s --two-stage --hint 4b-base [--push]   two-stage GPU run
+      [--pool5]: stage 1 on the 120k pool (dhruvtibarewal/nlm-matched-clean, ext_pool5.py, attached)
   python kaggle/build_gpu_lora24.py --slug nllm-lora2s-smoke --two-stage --smoke [--push]    CPU smoke (DDP, gloo)
   python kaggle/build_gpu_lora24.py --slug nllm-lora24-smoke --smoke [--push]         CPU smoke (0.6B, tiny)
   python kaggle/build_gpu_lora24.py --slug nllm-lora24 --fetch
@@ -43,6 +44,8 @@ if __name__ == "__main__":
     ap.add_argument("--infer-from", default="", help="CPU inference smoke on the output of this (smoke) kernel")
     ap.add_argument("--two-stage", action="store_true", help="stage 1 on the public pool, then f0..f4 (DDP)")
     ap.add_argument("--pool-min-labels", type=int, default=10)
+    ap.add_argument("--pool5", action="store_true", help="two-stage: stage 1 on the 120k pool (dhruvtibarewal/"
+                    "nlm-matched-clean, ext_pool5.py) instead of prvsiyan/ntl-public-in-style-pool-v1")
     ap.add_argument("--pre-max-h", type=float, default=1.5, help="two-stage: wall-clock cap of stage 1 (job 'pre')")
     ap.add_argument("--fold-max-h", type=float, default=0.42, help="two-stage: wall-clock cap of each fold job")
     ap.add_argument("--micro", type=int, default=3, help="two-stage: triples per forward pass (8B on a T4: 1)")
@@ -84,16 +87,21 @@ if __name__ == "__main__":
     datasets, links = ["hasancmert/nllm-folds"], []
     if a.two_stage:
         import hashlib
-        pool = ROOT / "data" / "external" / "pools" / "prvsiyan" / "pool_v1.parquet"
-        sha = hashlib.sha256(pool.read_bytes()).hexdigest()
+        if a.pool5:
+            rel, dataset, phint = "data/external/pools/dhruv/nlm_pool_v5.parquet", "dhruvtibarewal/nlm-matched-clean", \
+                "nlm-matched-clean"
+        else:
+            rel, dataset, phint = "data/external/pools/prvsiyan/pool_v1.parquet", "prvsiyan/ntl-public-in-style-pool-v1", \
+                "ntl-public-in-style-pool"
+        sha = hashlib.sha256((ROOT / rel).read_bytes()).hexdigest()
         code_files.update({f"src/{f}": ROOT / "src" / f for f in ("common.py", "ext_corpus.py", "ext_pool.py",
-                                                                   "ext_leak.py")})
+                                                                   "ext_pool5.py", "ext_leak.py")})
         code_files.update({f"reuse/{f}": ROOT / "reuse" / f for f in ("airline/metrics.py", "ev/__init__.py",
                                                                        "ev/cv_preds.py")})
-        datasets.append("prvsiyan/ntl-public-in-style-pool-v1")
-        links = [("pool_v1.parquet", "ntl-public-in-style-pool", "data/external/pools/prvsiyan/pool_v1.parquet")]
+        datasets.append(dataset)
+        links = [(Path(rel).name, phint, rel)]
         args = (f"--jobs pre,f0,f1,f2,f3,f4 --init-pre --epochs 2 --lr 5e-5 --head-lr 5e-4 --micro {a.micro} "
-                f"--pool-min-labels {a.pool_min_labels} --pool-sha {sha} "
+                f"--pool-min-labels {a.pool_min_labels} --pool-sha {sha} --pool-src {'pool5' if a.pool5 else 'pool'} "
                 f"--pre-max-seconds {a.pre_max_h * 3600:.0f} --max-seconds {a.fold_max_h * 3600:.0f}")
         env = "LORA24_DDP=1 "
         if a.smoke:

@@ -14,7 +14,8 @@ growth; an update whose gradients overflow is redone with half the scale, at mos
 Fixed epochs: held-out labels never select anything.
 
 Two-stage variant (public "Two-stage LoRA on the public pool", Nishant Dahal; re-implemented): job 'pre' trains the
-same network on the public passage pool only (ext_pool.load; every prompt block topic-matched to an official prompt
+same network on the public passage pool only (ext_pool.load, or ext_pool5.load with --pool-src pool5, the 120k
+pool; every prompt block topic-matched to an official prompt
 is dropped (ext_leak), so the stage-1 model never saw a validated prompt and is shared by all folds), class-weighted
 cross-entropy (the pool is unbalanced), --pre-epochs (1) at --pre-lr / --pre-head-lr; fold jobs then start from its
 adapter and heads (--init-pre) and train on the official rows (public recipe: 2 epochs at lr 5e-5 / 5e-4).
@@ -166,20 +167,21 @@ class Lora24:
         return out
 
 
-def pool_rows(train_csv, min_labels, limit=0, sha=""):
-    """Stage-1 rows: the public passage pool (ext_pool.load) minus every prompt block topic-matched to an official
-    prompt (ext_leak.compute, as extdata): stage 1 is shared by all folds, so it must not see any validated prompt.
-    Blocks need >= 3 rows (same-prompt triples). limit (smoke tests): keep the first N blocks. sha: expected sha256
-    of the pool file (the version the local CV used)."""
+def pool_rows(train_csv, min_labels, limit=0, sha="", src="pool"):
+    """Stage-1 rows: the public passage pool (src 'pool': ext_pool.load, 'pool5': ext_pool5.load) minus every prompt
+    block topic-matched to an official prompt (ext_leak.compute, as extdata): stage 1 is shared by all folds, so it
+    must not see any validated prompt. Blocks need >= 3 rows (same-prompt triples). limit (smoke tests): keep the
+    first N blocks. sha: expected sha256 of the pool file (the version the local CV used)."""
     import hashlib
+    import importlib
     import ext_leak
-    import ext_pool
+    pool_mod = importlib.import_module("ext_pool5" if src == "pool5" else "ext_pool")
     if sha:
-        got = hashlib.sha256(ext_pool._find(ext_pool.D).read_bytes()).hexdigest()
+        got = hashlib.sha256(pool_mod._find(pool_mod.D).read_bytes()).hexdigest()
         assert got == sha, f"pool file differs from the local copy (sha256 {got})"
     tr = pd.read_csv(train_csv)
-    df = ext_pool.load(min_labels=min_labels)
-    lm, _ = ext_leak.compute(tr, ext_pool.load(min_labels=1))
+    df = pool_mod.load(min_labels=min_labels)
+    lm, _ = ext_leak.compute(tr, pool_mod.load(min_labels=1))
     flagged = set(lm.loc[lm["flagged"], "ext_id"])
     n0 = len(df)
     df = df[~df["ext_id"].isin(flagged)]
@@ -387,6 +389,7 @@ def main():
     ap.add_argument("--pool-min-labels", type=int, default=10, help="job 'pre': minimum labels per pool block")
     ap.add_argument("--pool-limit", type=int, default=0, help="SMOKE TEST ONLY: keep the first N pool blocks")
     ap.add_argument("--pool-sha", default="", help="expected sha256 of the pool file")
+    ap.add_argument("--pool-src", default="pool", choices=["pool", "pool5"], help="job 'pre': ext_pool or ext_pool5")
     ap.add_argument("--pre-epochs", type=int, default=1)
     ap.add_argument("--pre-lr", type=float, default=1e-4)
     ap.add_argument("--pre-head-lr", type=float, default=1e-3)
@@ -413,7 +416,7 @@ def main():
          "groups": tr["prompt_id"].astype(str).to_numpy(), "folds": fd["fold"].to_numpy()}
     jobs = a.jobs.split(",") if a.ddp else a.jobs.split(",")[a.worker::a.workers]
     if "pre" in jobs:
-        pool = pool_rows(a.train, a.pool_min_labels, a.pool_limit, a.pool_sha)
+        pool = pool_rows(a.train, a.pool_min_labels, a.pool_limit, a.pool_sha, a.pool_src)
         d.update(pool_ids=tokenize(tok, pool["text"].tolist(), a.max_len),
                  pool_y=pool["label"].map({c: i for i, c in enumerate(CLASSES)}).to_numpy(),
                  pool_groups=pool["prompt_group_id"].astype(str).to_numpy())
