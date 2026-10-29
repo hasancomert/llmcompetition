@@ -95,6 +95,35 @@ Kaynaklar (lisanslar 21 Ekim'de Kaggle metadata'sından tek tek kontrol edildi):
     (`build_submission.py --pool-dataset`), sha256 farklıysa günlüğe uyarı yazılıyor.
 - Atıf: bu veriyle yapılan her paylaşımda havuzu kuran prvsiyan'a ve 15 kaynağın yazarlarına atıf yapılacak.
 
+## 120 binlik public havuz (dhruvtibarewal/nlm-matched-clean, `nlm_pool_v5.parquet`; 29 Ekim)
+
+0.649–0.666 public notebook'ları iki aşamalı LoRA'nın 1. aşamasında ve n-gram SVM'de bu havuzu kullanıyor. mathleteutd,
+dhruvtibarewal'ın yazısından aktarıyor: 38 binlik havuzla 4 farklı omurga ~0.57'de kalmış; aynı tarif 120 binle 14B'de
+0.634 vermiş ("skorun çoğu veri"). İndirildi: `data/external/pools/dhruv/` (git'e girmez), sha256 `040afb36…4650`.
+
+- 119.899 pasaj, 46 kaynak. Dataset lisansı MIT; her satır kendi kaynağının lisansını taşıyor (`src` sütunu).
+  Bizim 38,6 binlik havuzun 38.166 pasajı bunun içinde.
+- Kurucunun temizliği (dataset açıklaması): tam ve yakın tekrarlar, train'deki her metin, sohbet / iz / benchmark
+  tarzı derlemler ve modelin train'de hiç kullanmadığı tipografi işaretini taşıyan pasajlar atılmış. Train'le birebir
+  aynı metin yok (kontrol ettik).
+- Lisanslar (29 Ekim, her kaynağın Kaggle metadata'sı tek tek çekildi;
+  `scratchpad/pool120/meta/licenses.json`):
+
+| lisans | kaynak sayısı | satır |
+|---|---|---|
+| CC BY 4.0 | 30 | 92.042 (en büyükleri arxitekton 15.688, willrice 10.625, trnhip 9.636, maniceet 7.548) |
+| CC BY-SA 4.0 | 8 | 21.830 (drjcfmd 13.499) |
+| CC0 | 2 | 2.261 |
+| MIT (dataset sahibinin kendi satırları: `nlm-matched-clean:pool_v2`, Kaggle Benchmarks proxy'siyle ürettiği `own_gen`) | 1 + own_gen | 2.472 |
+| **atıldı:** "other" ve şartı yazılmamış (`abdelghanyrageh/ntl-extra-merged`), "unknown" (`illiadolenko/ntl-merged-corpus-v2`), kaynağı belirsiz `local/kaggle_harvest`, `local/evren_batch_pilot` | 4 | 1.294 |
+
+  Kalanların hepsi ticari kullanıma izin veriyor (BY / BY-SA atıf ister, BY-SA paylaşımda aynı lisansı ister).
+- Bizim kurallarımız (`src/ext_pool5.py`, `ext_pool.py` ile aynı): `clean_text`, 40–250 kelime, uzun tireli Gemini
+  pasajı yok, iki etiketli metin atılır, tekilleştirme. Sonuç: 115.776 satır (15.373 blok); 10+ etiketli bloklarda
+  81.495 satır (3.567 blok). `own_gen` satırlarının prompt anahtarı yok: her biri kendi bloğu.
+- Kullanım: CPU üyelerine ek satır (`--ext pool5`); iki aşamalı LoRA'nın 1. aşaması (`build_gpu_lora24.py --pool5`).
+- Atıf: bu veriyle yapılan her paylaşımda dhruvtibarewal'a ve 46 kaynağın yazarlarına atıf yapılacak.
+
 ## Kaggle Benchmarks model proxy (16 Ekim)
 
 - **Ne:** Kaggle'ın benchmark task'larında modelleri çağıran proxy.
