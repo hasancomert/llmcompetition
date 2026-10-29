@@ -21,6 +21,7 @@ rows. In a Kaggle notebook the dataset is attached as an input and --ext-dir poi
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 import pandas as pd
@@ -106,8 +107,8 @@ class Ext:
     def __len__(self):
         return len(self.df)
 
-    @property
-    def texts(self) -> list:
+    @cached_property
+    def texts(self) -> list:                  # cached: train_tfidf indexes it row by row (was O(n^2) on 115k rows)
         return self.df["text"].tolist()
 
     def allowed(self, val_pids) -> np.ndarray:
