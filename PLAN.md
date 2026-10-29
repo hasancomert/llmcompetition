@@ -658,9 +658,23 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
      `python kaggle/build_submission.py --gpu --pipeline replay.py --extra "--recipe v7p" --pub-datasets --pool-dataset
      --cheap-commit --push`. COMPLETE olunca logdaki denetimler okunur, sonra yarışmaya gönderilir. LB, Gaussian'ın ve
      havuz SVC'sinin gizli testteki etkisini gösterir.
-  3. İki aşamalı 4B LoRA (`--slug nllm-lora2s --two-stage --hint 4b-base --budget-h 3.75`).
-  4. İki aşamalı 8B LoRA (`--slug nllm-lora2s8 --two-stage --hint 8b-base --micro 1 --pre-max-h 2.5 --fold-max-h 0.6
-     --budget-h 6`; T4'te 8B için üçlü başına bir ileri geçiş).
+  3. İki aşamalı 4B LoRA, 1. aşama 120 binlik havuzla (29 Ekim güncellemesi, aşağıda):
+     `--slug nllm-lora2s5 --two-stage --pool5 --hint 4b-base --pre-max-h 3 --budget-h 5.5`.
+  4. İki aşamalı 8B LoRA, aynı havuzla: `--slug nllm-lora2s58 --two-stage --pool5 --hint 8b-base --micro 1
+     --pre-max-h 5.5 --fold-max-h 0.6 --budget-h 9` (T4'te 8B için üçlü başına bir ileri geçiş). 3 ve 4 iki ayrı GPU
+     oturumunda aynı anda koşabilir (v7p'nin kısa kayıt koşusundan sonra).
+  - 29 Ekim güncellemesi: 1. aşama havuzu `prvsiyan/ntl-public-in-style-pool-v1` yerine
+    `dhruvtibarewal/nlm-matched-clean` (`nlm_pool_v5`; lisans denetimi ve kurallar EXTERNAL_DATA.md'de).
+    - Gerekçe: public notebook'lar aynı tarifle 38 binlik havuzda ~0.57, 120 binlikte 0.634 (14B) bildiriyor.
+    - Sızıntı süzgecinden sonra 1. aşamada 73.050 satır (3.212 blok), eski havuzda 17.860.
+    - Süre tahmini (probe2 hızından, belirsiz): 4B ~27 bin satır/sa (1 epoch ~2,7 sa), 8B ~yarısı (~5,4 sa).
+      `--fit-cap`, ilk güncellemelerin hızını ölçüp öğrenme oranı takvimini süre sınırına sığdırıyor. Hız
+      düşükse epoch'un rastgele bir kısmı görülür, takvim yine sıfıra iner.
+    - Toplam ~14,5 GPU-saat (önceki plan ~10).
+    - Kaggle CPU duman testleri (29 Ekim, `nllm-lora2s5-smoke` v1–v2) geçti: havuz v5, sha256, sızıntı süzgeci,
+      DDP (gloo, iki süreç, ağırlık farkı 0.0), f0 1. aşamadan başladı. v2'de kısa sınır zorlandı: 34 sn/güncelleme
+      ölçüldü, takvim 23'ten 11 güncellemeye indi ve 1. aşama 396 sn'lik sınırın içinde (386 sn) bitti.
+    - LoRA üyeleri yalnız CV'leri artırırsa gönderime girer (kural).
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
