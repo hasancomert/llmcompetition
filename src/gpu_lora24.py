@@ -251,9 +251,10 @@ def run_job(a, name, d, rank=0, world=1):
           f"{len(valid)}, {total} updates, {epochs} epochs, lr {lr:g} / {head_lr:g}"
           f"{', init ' + str(init) if init else ''}{', class-weighted' if wt is not None else ''}", flush=True)
     opt = torch.optim.AdamW([{"params": adapter, "lr": lr}, {"params": heads, "lr": head_lr}], weight_decay=0.01)
-    warm = max(1, int(0.1 * total))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: (s + 1) / warm if s < warm else
-                                              0.5 * (1 + math.cos(math.pi * min(1.0, (s - warm) / max(1, total - warm)))))
+    sch = {"total": total, "warm": max(1, int(0.1 * total))}     # --fit-cap may shorten the schedule (see below)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: (s + 1) / sch["warm"] if s < sch["warm"] else 0.5 * (
+        1 + math.cos(math.pi * min(1.0, (s - sch["warm"]) / max(1, sch["total"] - sch["warm"])))))
+    probe = (max(1, min(10, total // 10)), max(2, min(30, total // 5)))   # updates timed for --fit-cap
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", init_scale=256.0, growth_interval=1_000_000, enabled=use_amp)
     log = {"job": name, "fit_rows": int(len(fit)), "valid_rows": int(len(valid)), "updates": total, "epochs": epochs,
@@ -266,6 +267,7 @@ def run_job(a, name, d, rank=0, world=1):
     net.centered.train()
     step, t1 = 0, time.time()
     stop = False
+    t_probe = None
     for ep, triples in enumerate(plan):
         for s in range(0, len(triples), 6):
             group = triples[s:s + 6]
@@ -303,6 +305,22 @@ def run_job(a, name, d, rank=0, world=1):
                 break
             sched.step()
             step += 1
+            if a.fit_cap and max_seconds and step == probe[0]:
+                t_probe = time.time()
+            if a.fit_cap and max_seconds and step == probe[1] and t_probe is not None:
+                # shorten the schedule so that warmup + cosine end inside the cap (5% margin): the triples are in random
+                # order, so the updates done are a random part of the epoch; process 0 decides for everyone
+                per = (time.time() - t_probe) / (probe[1] - probe[0])
+                fit_n = torch.tensor([float(step + int(0.95 * (max_seconds - (time.time() - t0)) / per))], device=device)
+                if world > 1:
+                    dist.broadcast(fit_n, 0)
+                if int(fit_n.item()) < sch["total"]:
+                    sch["total"] = max(step + 1, int(fit_n.item()))
+                    sch["warm"] = max(1, min(sch["warm"], int(0.25 * sch["total"])))   # unchanged unless > 25%
+                    log["schedule_updates"] = sch["total"]
+                    if rank == 0:
+                        print(f"[{name}] --fit-cap: {per:.2f}s per update, schedule shortened to {sch['total']}/{total} "
+                              "updates", flush=True)
             if step % 10 == 0 or step == total:
                 h = {"step": step, "epoch": ep + 1, "plain": float(np.mean([x[0] for x in stats])),
                      "center": float(np.mean([x[1] for x in stats])), "grad_norm": gn,
@@ -315,12 +333,15 @@ def run_job(a, name, d, rank=0, world=1):
                 if world > 1:
                     dist.broadcast(flag, 0)
                 stop = bool(flag.item())
+            short_done = sch["total"] < total and step >= sch["total"]   # the shortened schedule is complete
+            stop = stop or short_done
             if stop:
                 break
         if stop:
             log["truncated"] = True
             if rank == 0:
-                print(f"[{name}] TIME CAP {max_seconds}s reached after {step}/{total} updates", flush=True)
+                print(f"[{name}] {'shortened schedule complete' if short_done else f'TIME CAP {max_seconds}s reached'} "
+                      f"after {step}/{total} updates", flush=True)
             break
     log["updates_done"] = step
     log["train_seconds"] = round(time.time() - t1, 1)
@@ -384,6 +405,8 @@ def main():
     ap.add_argument("--micro", type=int, default=1, help="triples per forward pass")
     ap.add_argument("--max-seconds", type=float, default=0, help="wall-clock cap of each fold job (0: none)")
     ap.add_argument("--pre-max-seconds", type=float, default=0, help="wall-clock cap of the job 'pre' (0: none)")
+    ap.add_argument("--fit-cap", action="store_true", help="time the first updates and shorten the warmup + cosine "
+                    "schedule of a capped job so that it ends inside its cap (instead of stopping mid-schedule)")
     ap.add_argument("--ddp", action="store_true", help="torchrun: every job on all processes, gradients summed")
     ap.add_argument("--init-pre", action="store_true", help="fold jobs start from <out>/pre (two-stage)")
     ap.add_argument("--pool-min-labels", type=int, default=10, help="job 'pre': minimum labels per pool block")

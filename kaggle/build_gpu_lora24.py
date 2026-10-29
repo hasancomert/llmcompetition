@@ -46,7 +46,8 @@ if __name__ == "__main__":
     ap.add_argument("--pool-min-labels", type=int, default=10)
     ap.add_argument("--pool5", action="store_true", help="two-stage: stage 1 on the 120k pool (dhruvtibarewal/"
                     "nlm-matched-clean, ext_pool5.py) instead of prvsiyan/ntl-public-in-style-pool-v1")
-    ap.add_argument("--pre-max-h", type=float, default=1.5, help="two-stage: wall-clock cap of stage 1 (job 'pre')")
+    ap.add_argument("--pre-max-h", type=float, default=1.5, help="two-stage: wall-clock cap of stage 1 (job 'pre'); "
+                    "--fit-cap shortens a job's schedule to end inside its cap")
     ap.add_argument("--fold-max-h", type=float, default=0.42, help="two-stage: wall-clock cap of each fold job")
     ap.add_argument("--micro", type=int, default=3, help="two-stage: triples per forward pass (8B on a T4: 1)")
     ap.add_argument("--push", action="store_true")
@@ -102,7 +103,7 @@ if __name__ == "__main__":
         links = [(Path(rel).name, phint, rel)]
         args = (f"--jobs pre,f0,f1,f2,f3,f4 --init-pre --epochs 2 --lr 5e-5 --head-lr 5e-4 --micro {a.micro} "
                 f"--pool-min-labels {a.pool_min_labels} --pool-sha {sha} --pool-src {'pool5' if a.pool5 else 'pool'} "
-                f"--pre-max-seconds {a.pre_max_h * 3600:.0f} --max-seconds {a.fold_max_h * 3600:.0f}")
+                f"--pre-max-seconds {a.pre_max_h * 3600:.0f} --max-seconds {a.fold_max_h * 3600:.0f} --fit-cap")
         env = "LORA24_DDP=1 "
         if a.smoke:
             args += " --jobs pre,f0 --limit 6 --pool-limit 12 --n-layers 12 --max-len 128 --micro 2"
