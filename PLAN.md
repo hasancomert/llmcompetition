@@ -706,6 +706,13 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - char+word LR havuz v5'le birleştiriciye katkı vermedi (EXPERIMENTS 634–635).
     - Bu hafta başka GPU işi yok. Kota 01:59'da 17,7 sa; v8 ~03:35, v8b ~07:55'te bitince ~29,6 sa olacak. Araya iş
       girerse v8b'nin koşusu kota bitince kesilebilir. LoRA tohumları ve yeni omurgalar 31 Ekim kotasına kaldı.
+  - 30 Ekim 03:50 UTC:
+    - v7q public LB **0.530** (v7p 0.516).
+    - v8'in tam kayıt koşusu temiz: LoRA çapa farkı 0, notebook içi OOF 0.5879 (yerel 0.5875), 3,8 sa (sınır 9).
+      03:56'da gönderildi (ref 57791776).
+    - Son sürüm koşarken eski sürümün logu: `list_kernel_session_output` isteğinde `version_label="v8"`. CLI'nin
+      `kernels output` komutu hep son sürümü veriyor.
+    - Kota 03:55'te 20,0 sa; yalnız v8b koşuyor.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
