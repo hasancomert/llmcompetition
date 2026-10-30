@@ -715,6 +715,8 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Kota 03:55'te 20,0 sa; yalnız v8b koşuyor.
   - 30 Ekim 08:16 UTC: v8b'nin tam kayıt koşusu temiz. 4B ve 8B çıkarımında çapa farkı 0, notebook içi OOF 0.6064
     (= yerel), 3,8 sa. 08:17'de gönderildi (ref 57798979). v8 (ref 57791776) hâlâ puanlanıyor. Kota 21,8 / 30 sa.
+  - LB'ler (30 Ekim 14:14 UTC): v8 **0.578** (CV 0.5875), v8b **0.596** (CV 0.6064). LoRA'ların CV kazancı gizli
+    teste neredeyse birebir taşındı (v7q → v8b: CV +0.066, LB +0.066).
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
