@@ -699,6 +699,13 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
       Kaggle'da doğrulamak ve notebook içi OOF'u görmek. Bitince gönderilecek.
     - 8B LoRA ~01:40 UTC'de bitecek; üyesi CV'de ölçülüp v8'e eklenirse v8b.
     - Kota 22:37 UTC'de 13,1 / 30 sa.
+  - Gece (30 Ekim 01:50 UTC):
+    - 8B LoRA bitti (7,0 sa). Üye 0.5894; iki LoRA'lı birleştirici **0.6064** (v8'e göre +0.019, P 0.002).
+    - v8b (= v8 + 8B LoRA) 01:55'te tam kayıt koşusuyla push'landı (sürüm 9, ~6 sa); 8B çıkarımı Kaggle'da da
+      doğrulanacak. v8 (sürüm 8) da sürüyor: kota hızı 2 oturum, yeni sürüm eskisini iptal etmedi.
+    - char+word LR havuz v5'le birleştiriciye katkı vermedi (EXPERIMENTS 634–635).
+    - Bu hafta başka GPU işi yok. Kota 01:59'da 17,7 sa; v8 ~03:35, v8b ~07:55'te bitince ~29,6 sa olacak. Araya iş
+      girerse v8b'nin koşusu kota bitince kesilebilir. LoRA tohumları ve yeni omurgalar 31 Ekim kotasına kaldı.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
