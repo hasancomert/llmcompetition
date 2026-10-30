@@ -713,6 +713,8 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     - Son sürüm koşarken eski sürümün logu: `list_kernel_session_output` isteğinde `version_label="v8"`. CLI'nin
       `kernels output` komutu hep son sürümü veriyor.
     - Kota 03:55'te 20,0 sa; yalnız v8b koşuyor.
+  - 30 Ekim 08:16 UTC: v8b'nin tam kayıt koşusu temiz. 4B ve 8B çıkarımında çapa farkı 0, notebook içi OOF 0.6064
+    (= yerel), 3,8 sa. 08:17'de gönderildi (ref 57798979). v8 (ref 57791776) hâlâ puanlanıyor. Kota 21,8 / 30 sa.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
