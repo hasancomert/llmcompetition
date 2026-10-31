@@ -325,7 +325,7 @@ ortalama / std'siyle ölçekleniyor (etiket yok). Tek LR üyesi, C=0.0003; tutul
 - İkiz kümelemesi (20 Ekim): TF-IDF'e Qwen3 katman uzaklığı karıştırmak çift recall'u düşürüyor (satır 574). TF-IDF türleri ve bağlantı yöntemleri (`cluster_scan`, 405 ayar) recall'u aynı precision'da +0.04–0.06 artıran ayarlar buldu, ama taze benzetimde (tohum 1, 10 sim, satırlar 575–590) BA kazancı yok: 1–2 / 1–5 / 2–4 / 3–8 için mevcut (ortalama bağlantı, kesim 0.85) +0.004 / +0.043 / +0.043 / +0.065; complete 0.9: −0.012 / +0.043 / +0.042 / +0.065; bigram + weighted: −0.002 / +0.043 / +0.043 / +0.066; complete + max_df 80: −0.011 / +0.042 / +0.043 / +0.068. Seyrek yapıda precision düşüşü zarar veriyor; mevcut kümeleme kalıyor.
 - LoRA24 (`gpu_lora24.py`): Kaggle CPU duman testleri geçti (eğitim: 0.6B, 12 katman, 6 prompt, 1 epoch, bütün çıktılar; çıkarım: çapa eşleşmesi birebir). GPU koşusu 24 Ekim'den sonra, kullanıcı onayıyla.
 
-## Public post-adımlar, 120 binlik havuz ve iki aşamalı LoRA (29–30 Ekim; satırlar 618–635)
+## Public post-adımlar, 120 binlik havuz ve iki aşamalı LoRA (29–31 Ekim; satırlar 618–)
 
 - V31'in yumuşak Sinkhorn'u ve Bayesçi tipografisi (satır 618–623): tam OOF'ta düz birleştiricinin ±0.002'si içinde,
   v7p ikizleri + Gaussian üstüne benzetimde −0.005 … +0.002. Alınmadı.
@@ -369,6 +369,20 @@ ortalama / std'siyle ölçekleniyor (etiket yok). Tek LR üyesi, C=0.0003; tutul
     [+0.0071, +0.0307], P 0.002. Tarif `v8b`.
 - char+word LR havuz v5'le (Kaggle CPU, 8,2 sa; satır 635): 0.4493 (pub'lı 0.3886; +0.0607). Birleştiricide pub'lı
   sürümün yerine konunca sonuç birebir aynı (satır 634): iç içe karışım ona iki durumda da ağırlık vermiyor. Alınmadı.
+- LB (satır 639–640): v8 0.578, v8b 0.596. LoRA'ların CV kazancı gizli teste neredeyse birebir taşındı.
+- 8B varken 4B'nin birleştiriciye katkısı sıfır: yalnız 8B'li birleştirici de 0.6064, tahminler birebir aynı.
+- LoRA ikizleri (`adaptive_sim --lora-jobs`; `lora_twin_sim_v8b_*`):
+  - 8B'nin merkezli başı, küme ve kat içinde merkezlenmiş ayrılmış özniteliklerle.
+  - v8b'nin son adımlarına w 0.25 ile eklenince yapı başına +0.002 / +0.008 / +0.003 / +0.010 / +0.005.
+  - Gaussian tek başına küçük kümelerde artık zarar veriyor (1–2: −0.007).
+  - Tarif `v8c`.
+- İki 8B çeşidi daha (31 Ekim):
+  - `58b`: tohum 2, 1. aşama havuzun 3+ etiketli blokları (97.474 satır, epoch'un %83'ü, 6,2 sa). Üye 0.5949.
+  - `58c`: tohum 3, eski veri (%87, 5,3 sa). Üye 0.5779.
+  - Birleştiricide 8B + `58b` **0.6186** (+0.0122 [+0.0033, +0.0211]). `58c` eklenince 0.6157. Ortalama üye
+    (3'lü / 2'li) 0.6142 / 0.6187.
+  - Tarif `v9` (4B yerine `58b`, ikizler v8c gibi). İkizler v9'un birleştiricisinde yeniden simüle edildi; v8c ayarı
+    düz birleştiriciye göre her yapıda olumlu (+0.002 / +0.014 / +0.027 / +0.037 / +0.056).
 
 ## Featherless ek veri: uyum testi (16 Ekim; dal `featherless-extra-data`)
 
