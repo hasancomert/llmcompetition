@@ -221,6 +221,9 @@ def main():
     ap.add_argument("--gauss-d", type=int, default=256)
     ap.add_argument("--gauss-T", default="1,3", help="temperature grid of the Gaussian head")
     ap.add_argument("--gauss-w", default="0.1,0.25,0.5", help="weight grid of the Gaussian evidence")
+    ap.add_argument("--lora-jobs", default="", help="LoRA24 twins: comma-separated jobs dirs (f0..f4 with held-out "
+                    "features and readouts); centered readout on features centered within cluster and fold")
+    ap.add_argument("--lora-w", default="0.25,0.5,1", help="weight grid of the LoRA twin evidence")
     ap.add_argument("--soft-sink", default="", help="damped balancing settings strength:rho, comma-separated")
     ap.add_argument("--typo", action="store_true", help="add the gated typography evidence (post_steps.Typography)")
     ap.add_argument("--hungarian", default="", help="one-to-one assignment inside clusters of m..max-size texts after "
@@ -285,6 +288,18 @@ def main():
                 gU[v, k] = (h, h.transform(Xtr))
             del Xtr
             print(f"gauss {v}: 5 folds ({time.time() - t0:.0f}s)", flush=True)
+    lora = []                                            # per jobs dir: (held-out features of every train row, readouts)
+    for d in [d for d in a.lora_jobs.split(",") if d]:
+        Z, ros = None, []
+        for k in range(n_f):
+            idx, V = np.load(f"{d}/f{k}/valid_idx.npy"), np.load(f"{d}/f{k}/valid_features.npy")
+            if Z is None:
+                Z = np.zeros((len(y), V.shape[1]), np.float32)
+            Z[idx] = V
+            ros.append(np.load(f"{d}/f{k}/readouts.npz"))
+        lora.append((Z, ros))
+        print(f"lora twins {d}: features {Z.shape} ({time.time() - t0:.0f}s)", flush=True)
+    lws = [float(w) for w in a.lora_w.split(",")] if lora else []
     sinks = [tuple(float(x) for x in t.split(":")) for t in a.soft_sink.split(",") if t]
     prior = (np.bincount(y, minlength=K) + 1.0) / (len(y) + K)
     typo_ev = None
@@ -361,6 +376,21 @@ def main():
                             pos = {r: i for i, r in enumerate(members)}
                             Lg[loc] += S[[pos[r] for r in loc]]
                 L_g[T] = Lg
+            Ll = None
+            if lora:                                     # LoRA twins: centered head on cluster-centered features
+                from lora24_member import readout
+                Ll = np.zeros((len(keep), K))
+                for Z, ros in lora:
+                    for k in range(n_f):
+                        loc = np.flatnonzero((fk == k) & adapt)
+                        if len(loc):
+                            Zl, gl = Z[keep[loc]], g[loc]
+                            Zc = Zl.copy()
+                            for c in np.unique(gl):
+                                Zc[gl == c] -= Zl[gl == c].mean(0)
+                            Ll[loc] += np.log(np.clip(readout(Zc, ros[k], "center"), 1e-9, 1))
+                for wl in lws:
+                    res[f"L{wl:g}"] = ba(lp + wl * Ll)
             for T, Lg in L_g.items():
                 for wg in gws:
                     zg = lp + wg * Lg
@@ -382,6 +412,8 @@ def main():
                     for T, Lg in L_g.items():
                         for wg in gws:
                             res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}"] = ba(z + wg * Lg)
+                            for wl in lws:
+                                res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}_L{wl:g}"] = ba(z + wg * Lg + wl * Ll)
                             post_variants(res, f"C{C:g}_w{w:g}_G{T:g}x{wg:g}", z + wg * Lg, keep, ba)
                             for m in hms:
                                 res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}_h{m}"] = ba_pred(hungarian(z + wg * Lg, g, m,
@@ -398,7 +430,7 @@ def main():
             print(" ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in res.items()), flush=True)
     df = pd.DataFrame(rows)
     cols = [c for c in df.columns if c not in ("range", "sim", "n")]
-    var = [c for c in cols if c.startswith(("C", "G", "plain_b", "plain_h", "plain_ss", "plain_ty"))]   # vs plain
+    var = [c for c in cols if c.startswith(("C", "G", "L", "plain_b", "plain_h", "plain_ss", "plain_ty"))]   # vs plain
     summ = df.groupby("range")[cols].mean()
     for c in var:
         d = df[c] - df["plain"]
