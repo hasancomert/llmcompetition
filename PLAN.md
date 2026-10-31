@@ -717,6 +717,19 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
     (= yerel), 3,8 sa. 08:17'de gönderildi (ref 57798979). v8 (ref 57791776) hâlâ puanlanıyor. Kota 21,8 / 30 sa.
   - LB'ler (30 Ekim 14:14 UTC): v8 **0.578** (CV 0.5875), v8b **0.596** (CV 0.6064). LoRA'ların CV kazancı gizli
     teste neredeyse birebir taşındı (v7q → v8b: CV +0.066, LB +0.066).
+- GPU planı, 31 Ekim – 6 Kasım haftası (30 sa; 31 Ekim 00:30 UTC'de yazıldı):
+  - Ölçüm: 8B LoRA varken 4B'nin birleştiriciye katkısı sıfır (yalnız 8B'li birleştirici 0.6064, iki LoRA'lı da
+    0.6064, tahminler birebir aynı). Bu hafta 4B yok, 8B çeşitleri var.
+  - A. `nllm-lora2s58b`: 8B, tohum 2, 1. aşama havuz v5'in 3+ etiketli blokları (sızıntı süzgecinden sonra 97.474
+    satır, 7.684 blok; eskisi 73.050). 1. aşama sınırı 6,5 sa (`--fit-cap`), fold'lar 0,6'şar sa, toplam sınır 9 sa.
+  - B. `nllm-lora2s58c`: 8B, tohum 3, eski 1. aşama verisi (10+ etiketli bloklar). Yalnız tohum çeşitliliği;
+    sınırlar v8b'nin 8B'siyle aynı (1. aşama 5,5 sa, toplam 9 sa).
+  - A ve B aynı anda iki oturumda (~9 sa). Toplam ~18 sa; ~12 sa kalır.
+  - Bitince: üyeler CPU'da kurulur, birleştiricide ölçülür, CV artarsa v9 ucuz commit'le gönderilir (LoRA yolu
+    v8 / v8b'nin tam kayıt koşularında doğrulandı).
+  - Kalan ~12 sa için aday (CPU ölçümüne göre karar): LoRA ikizleri (test kümelerinde merkezli okuma; önce CPU
+    benzetimi, GPU gerektirmez), farklı aile bir omurga (ör. Qwen2.5-7B, Apache 2.0; kod desteği gerekir), 120 binlik
+    havuzun LM öznitelikleri.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
