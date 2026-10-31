@@ -730,6 +730,12 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
   - Kalan ~12 sa için aday (CPU ölçümüne göre karar): LoRA ikizleri (test kümelerinde merkezli okuma; önce CPU
     benzetimi, GPU gerektirmez), farklı aile bir omurga (ör. Qwen2.5-7B, Apache 2.0; kod desteği gerekir), 120 binlik
     havuzun LM öznitelikleri.
+  - 31 Ekim 00:34 UTC: A ve B push'landı (kota 0'dan başladı).
+  - LoRA ikizleri benzetimi (CPU; EXPERIMENTS `lora_twin_sim_v8b_*`), v8b'nin düz birleştiricisi üzerinde:
+    - 8B'nin merkezli başı küme içinde merkezlenmiş özniteliklerle, w 0.25, v8b'nin son adımlarına eklendi. Yapılara
+      göre +0.002 / +0.008 / +0.003 / +0.010 / +0.005; her yapıda olumlu tek ayar.
+    - Gaussian tek başına küçük kümelerde artık zarar veriyor (1–2: −0.007); LoRA ikizleriyle birlikte olumlu.
+    - Tarif `v8c` = v8b + LoRA ikizleri (yerel denetim modu geçti). Gönderimi GPU slotu boşalınca, ucuz commit'le.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
