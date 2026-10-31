@@ -26,6 +26,7 @@ Recipes (CV = nested, EXPERIMENTS.md):
   v8    v7q + the two-stage 4B LoRA24 member (stage 1 on the 120k pool, kernel nllm-lora2s5 attached; CV 0.5875)
   v8b   v8 + the two-stage 8B LoRA24 member (kernel nllm-lora2s58 attached; CV 0.6064)
   v8c   v8b + the 8B LoRA twins (centered readout in the test clusters, weight 0.25; simulated +0.002..+0.010)
+  v9    v8c with a second 8B LoRA (seed 2, more stage-1 data; kernel nllm-lora2s58b) instead of the 4B (CV 0.6186)
   v7g   v7 + shared-prompt Gaussian group evidence of the same two views on the same test clusters (gauss_twins.py,
         weight 0.25, T 3) + one-to-one model assignment inside test clusters of 3..18 texts ("hungarian": 3, on the
         final log-posteriors). Simulated on held-out prompts (EXPERIMENTS gauss_sim_*): over the twins alone +0.009
@@ -166,6 +167,17 @@ STEPS["lora8_member"] = ({}, "lora24_member.py", ["--jobs-dir", "{JOBS:nllm-lora
                                                   "{OUT}/lora24_2s5_8b", "--member", "lora24_2s5_8b"])
 STEPS["lora8_twins"] = ({}, "lora24_member.py", ["--jobs-dir", "{JOBS:nllm-lora2s58}", "--features-dir",
                                                  "{OUT}/lora24_2s5_8b", "--twins", "twins_lora8", "--thr", "0.85"])
+STEPS["lora8b_infer"] = ({}, "lora24_infer.py", ["--model-dir", "{LM:8b-base}", "--jobs-dir", "{JOBS:nllm-lora2s58b}",
+                                                 "--texts", "{ROOT}/data/test.csv", "--train", "{ROOT}/data/train.csv",
+                                                 "--out", "{OUT}/lora24_2s5_58b"])
+STEPS["lora8b_member"] = ({}, "lora24_member.py", ["--jobs-dir", "{JOBS:nllm-lora2s58b}", "--features-dir",
+                                                   "{OUT}/lora24_2s5_58b", "--member", "lora24_2s5_58b"])
+STEPS["famc_super_v9"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
+    "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
+    "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
+    "ng_char-word13-shapec-fw_svc_C0.5_w1_0.7_0.5_0.5_ext-pool5-w1-ml1-bal", "lora24_2s5_8b", "lora24_2s5_58b",
+    "--base", "tfidf_charword_lr_C30_ext-pub-w0.3-bal", "tfidf_char_svc_C0.3_ext-pub-w0.3-bal", LP4_STYLE,
+    "emb_qwen3_4b_base_l12_C0.0003_ts", "emb_qwen3_8b_base_l12_C0.0003_ts", "--save", "famcsup6_l12_pub03_ts_ng4pool5_lora8_8b"])
 STEPS["famc_super_v8b"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
     "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
@@ -303,6 +315,20 @@ RECIPES = {
             "weights": {"famcsup6_l12_pub03_ts_ng4pool5_lora48": 1.0},
             "twins": {"twins_l12": 0.5, "gauss_l12": 0.25, "twins_lora8": 0.25},
             "cv": 0.6064},
+    "v9": {"needs_lm": True, "lm_extra": LM_L12, "needs_pool5": True,
+           # v8c with a second 8B two-stage LoRA (nllm-lora2s58b: seed 2, stage 1 on the 3+ label blocks of the 120k
+           # pool; OOF 0.5949) and without the 4B (no weight next to the 8B): super combiner 0.6064 -> 0.6186 (+0.0122
+           # [+0.0033, +0.0211]); a third 8B (seed 3) lowered it (0.6157). Twins as in v8c (8B LoRA twins w 0.25)
+           "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"],
+                       ["lora8_infer@2", "lora8_member@1", "lora8_twins@1", "lora8b_infer@2", "lora8b_member@1"]],
+                      [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                         "spec_super_ng@1", "twins_l12@1"]],
+                      [["ng4_pool5@4"]],
+                      [["famc_super_v9"]],
+                      [["gauss_l12"]]],
+           "weights": {"famcsup6_l12_pub03_ts_ng4pool5_lora8_8b": 1.0},
+           "twins": {"twins_l12": 0.5, "gauss_l12": 0.25, "twins_lora8": 0.25},
+           "cv": 0.6186},
 }
 
 
