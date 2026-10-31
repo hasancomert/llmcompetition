@@ -51,6 +51,13 @@ if __name__ == "__main__":
     ap.add_argument("--fold-max-h", type=float, default=0.42, help="two-stage: wall-clock cap of each fold job")
     ap.add_argument("--micro", type=int, default=3, help="two-stage: triples per forward pass (8B on a T4: 1)")
     ap.add_argument("--seed", type=int, default=42, help="two-stage: seed of the triple order, dropout and heads")
+    ap.add_argument("--model-handle", default="", help="Kaggle Models handle of another base model (e.g. "
+                    "qwen-lm/qwen2.5/transformers/7b/1; Apache 2.0 only); --hint must be its instance slug (7b)")
+    ap.add_argument("--n-layers", type=int, default=24, help="two-stage: trunk layers kept (memory on a T4)")
+    ap.add_argument("--smoke-handle", default="", help="--smoke with this model instead of Qwen3-0.6B "
+                    "(e.g. qwen-lm/qwen2.5/transformers/0.5b/1, hint 0.5b)")
+    ap.add_argument("--smoke-gpu", action="store_true", help="--smoke on a 2 x T4 machine (fp16, NCCL DDP) instead of "
+                    "the CPU (a few GPU minutes; when the CPU sessions are taken)")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--fetch", action="store_true")
     a = ap.parse_args()
@@ -104,23 +111,24 @@ if __name__ == "__main__":
         links = [(Path(rel).name, phint, rel)]
         args = (f"--jobs pre,f0,f1,f2,f3,f4 --init-pre --epochs 2 --lr 5e-5 --head-lr 5e-4 --micro {a.micro} "
                 f"--pool-min-labels {a.pool_min_labels} --pool-sha {sha} --pool-src {'pool5' if a.pool5 else 'pool'} "
-                f"--seed {a.seed} "
+                f"--seed {a.seed} --n-layers {a.n_layers} "
                 f"--pre-max-seconds {a.pre_max_h * 3600:.0f} --max-seconds {a.fold_max_h * 3600:.0f} --fit-cap")
         env = "LORA24_DDP=1 "
         if a.smoke:
             args += " --jobs pre,f0 --limit 6 --pool-limit 12 --n-layers 12 --max-len 128 --micro 2"
     if a.smoke:
-        hint = "0.6b-base"
+        hint = a.smoke_handle.split("/")[-2] if a.smoke_handle else "0.6b-base"
         if not a.two_stage:
             args = "--jobs f0 --limit 6 --epochs 1 --n-layers 12 --max-len 128"
-        env += "LORA24_DEVICE=cpu "
+        env += "" if a.smoke_gpu else "LORA24_DEVICE=cpu "
     d = kaggle_runner.build(
         build, a.slug, "hasancmert", code_files=code_files,
         commands=[f"{env}LORA24_MODEL_HINT={hint} LORA24_BUDGET_H={0 if a.smoke else a.budget_h:g} "
                   f"python src/gpu_run_lora24.py {args}"],
         competition="name-that-llm", datasets=datasets, links=links,
-        models=[f"qwen-lm/qwen-3/transformers/{hint}/1"], out_dirs=(),
-        gpu=not a.smoke, internet=False, machine_shape=None if a.smoke else "NvidiaTeslaT4")
+        models=[(a.smoke_handle if a.smoke else a.model_handle) or f"qwen-lm/qwen-3/transformers/{hint}/1"], out_dirs=(),
+        gpu=not a.smoke or a.smoke_gpu, internet=False,
+        machine_shape="NvidiaTeslaT4" if (not a.smoke or a.smoke_gpu) else None)
     print("built", d)
     if a.push:
         kaggle_runner.push(d)

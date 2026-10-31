@@ -736,6 +736,20 @@ Süreler, geçen haftaki koşuların loglarından tahmin. Kaggle'da aynı anda e
       göre +0.002 / +0.008 / +0.003 / +0.010 / +0.005; her yapıda olumlu tek ayar.
     - Gaussian tek başına küçük kümelerde artık zarar veriyor (1–2: −0.007); LoRA ikizleriyle birlikte olumlu.
     - Tarif `v8c` = v8b + LoRA ikizleri (yerel denetim modu geçti). Gönderimi GPU slotu boşalınca, ucuz commit'le.
+  - 31 Ekim 09:40 UTC, A ve B bitti (kota 15,2 sa):
+    - A (`58b`) üye 0.5949; B (`58c`) 0.5779.
+    - Birleştiricide ilk 8B + A **0.6186** (v8b'ye göre +0.0122 [+0.0033, +0.0211]). B'yi de eklemek 0.6157'ye
+      düşürüyor; üyelerin ortalamasını tek üye olarak vermek de daha iyi değil (0.6142 / 0.6187).
+    - İkizler bu birleştirici üzerinde yeniden simüle edildi: v8c'nin ayarı (LM 0.5 + Gaussian 0.25 + LoRA 0.25) düz
+      birleştiriciye göre her yapıda olumlu.
+    - Tarif `v9` (= v8c, 4B yerine ikinci 8B; CV 0.6186). 10:00'da ucuz commit'le gönderildi (ref 57835132),
+      kayıt denetimleri ok.
+  - Kalan ~14,8 sa: farklı aile omurga, **Qwen2.5-7B** (Apache 2.0, Kaggle Models `qwen-lm/qwen2.5/transformers/7b`).
+    - Aynı tarif; T4 belleği için 20 katman (~10,4 GB, Qwen3-8B-24 kadar). Tohum 42, 1. aşama havuz v5'in 3+ etiketli
+      blokları, sınırlar 6,5 / 0,6 / 9 sa.
+    - Builder'a `--model-handle`, `--n-layers`, `--smoke-handle`, `--smoke-gpu` eklendi. Qwen2.5-0.5B ile GPU duman
+      testi geçti (CPU oturumlarının 5'i de kullanıcının `sb-val-*` işlerinde).
+    - Amaç çeşitlilik: farklı ön eğitim verisi, farklı hatalar.
   5. Çıktılar ağırlıksız indirilir (`--fetch`), LoRA üyeleri ve ikizleri CPU'da (`lora24_member.py`), CV ölçülür;
      replay'e LoRA çıkarım adımı eklenir, yerelde test edilir; CV artarsa v8 gönderilir.
   6. Kota kalırsa `nllm-gpu-embed-ext` (~0.7 sa) ve 14B / ikinci tohum.
