@@ -409,6 +409,8 @@ def main():
                     for m in hms:
                         res[f"C{C:g}_w{w:g}_h{m}"] = ba_pred(hungarian(z, g, m, a.max_size))
                     post_variants(res, f"C{C:g}_w{w:g}", z, keep, ba)
+                    for wl in lws:                       # LoRA twins next to the LM twins, without the Gaussian heads
+                        res[f"C{C:g}_w{w:g}_L{wl:g}"] = ba(z + wl * Ll)
                     for T, Lg in L_g.items():
                         for wg in gws:
                             res[f"C{C:g}_w{w:g}_G{T:g}x{wg:g}"] = ba(z + wg * Lg)
