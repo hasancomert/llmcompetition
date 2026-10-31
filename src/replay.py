@@ -25,6 +25,7 @@ Recipes (CV = nested, EXPERIMENTS.md):
   v7q   v7p with the 4-view n-gram SVC trained with the 120k pool (ext_pool5.py) instead of the 38k one (CV 0.5405)
   v8    v7q + the two-stage 4B LoRA24 member (stage 1 on the 120k pool, kernel nllm-lora2s5 attached; CV 0.5875)
   v8b   v8 + the two-stage 8B LoRA24 member (kernel nllm-lora2s58 attached; CV 0.6064)
+  v8c   v8b + the 8B LoRA twins (centered readout in the test clusters, weight 0.25; simulated +0.002..+0.010)
   v7g   v7 + shared-prompt Gaussian group evidence of the same two views on the same test clusters (gauss_twins.py,
         weight 0.25, T 3) + one-to-one model assignment inside test clusters of 3..18 texts ("hungarian": 3, on the
         final log-posteriors). Simulated on held-out prompts (EXPERIMENTS gauss_sim_*): over the twins alone +0.009
@@ -163,6 +164,8 @@ STEPS["lora8_infer"] = ({}, "lora24_infer.py", ["--model-dir", "{LM:8b-base}", "
                                                 "--out", "{OUT}/lora24_2s5_8b"])
 STEPS["lora8_member"] = ({}, "lora24_member.py", ["--jobs-dir", "{JOBS:nllm-lora2s58}", "--features-dir",
                                                   "{OUT}/lora24_2s5_8b", "--member", "lora24_2s5_8b"])
+STEPS["lora8_twins"] = ({}, "lora24_member.py", ["--jobs-dir", "{JOBS:nllm-lora2s58}", "--features-dir",
+                                                 "{OUT}/lora24_2s5_8b", "--twins", "twins_lora8", "--thr", "0.85"])
 STEPS["famc_super_v8b"] = ({"FAMSPEC_GROUPS": "super"}, "family_combine.py", [
     "--specs", "sup_emb_qwen3_8b_base_l12_ts_C0.0003", "sup_emb_qwen3_4b_base_l12_ts_C0.0003", "sup_lpstyle_C0.03",
     "sup_ng_char+word+fw_C30", "--per-family", "--extra-members", "ng_char-word-fw_lr_C100_T_ext-pub-w0.3-bal",
@@ -284,6 +287,21 @@ RECIPES = {
                        [["gauss_l12"]]],
             "weights": {"famcsup6_l12_pub03_ts_ng4pool5_lora48": 1.0},
             "twins": {"twins_l12": 0.5, "gauss_l12": 0.25},
+            "cv": 0.6064},
+    "v8c": {"needs_lm": True, "lm_extra": LM_L12, "needs_pool5": True,
+            # v8b + the 8B LoRA twins: its centered head on test features centered within the topic clusters of the LM
+            # twins, weight 0.25 next to the LM twins (0.5) and the Gaussian heads (0.25). Simulated on the v8b plain
+            # combiner (EXPERIMENTS lora_twin_sim_v8b_*): +0.002 / +0.008 / +0.003 / +0.010 / +0.005 at 1-2 / 2-4 /
+            # 1-5 / 3-8 / 18 texts per prompt over v8b's post-steps, the only setting positive in every structure
+            "stages": [[["charword_pub@1"], ["svc_pub@1"], ["lp4@2", "emb4_l12_ts@2", "emb8_l12_ts@2"],
+                        ["lora4_infer@2", "lora4_member@1", "lora8_infer@2", "lora8_member@1", "lora8_twins@1"]],
+                       [["ng_fw_pub@1"], ["spec_super_e8_l12_ts@1", "spec_super_e4_l12_ts@1", "spec_super_lps@1",
+                                          "spec_super_ng@1", "twins_l12@1"]],
+                       [["ng4_pool5@4"]],
+                       [["famc_super_v8b"]],
+                       [["gauss_l12"]]],
+            "weights": {"famcsup6_l12_pub03_ts_ng4pool5_lora48": 1.0},
+            "twins": {"twins_l12": 0.5, "gauss_l12": 0.25, "twins_lora8": 0.25},
             "cv": 0.6064},
 }
 
